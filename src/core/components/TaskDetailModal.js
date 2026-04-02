@@ -1,0 +1,1214 @@
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  View, Text, StyleSheet, Modal, Animated, PanResponder, Dimensions,
+  TouchableOpacity, ScrollView, Alert, Platform, TextInput, ActivityIndicator
+} from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+
+import SyncService from '../sync/sync.service';
+import SurveyModal from './SurveyModal';
+import CommentsSection from './CommentsSection';
+import AttachmentsModal from './AttachmentsModal';
+import SimpleDateTimePicker from './SimpleDateTimePicker';
+import useNetwork from '../hooks/useNetwork';
+
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const MODAL_HEIGHT = SCREEN_HEIGHT * 0.85;
+
+const stripHtml = (html) => {
+  if (!html) return '';
+  return html
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .trim();
+};
+
+const parseOdooDate = (dateStr) => {
+  if (!dateStr) return null;
+  let formatted = dateStr.replace(' ', 'T');
+  if (!formatted.endsWith('Z')) formatted += 'Z';
+  return new Date(formatted);
+};
+
+const formatForOdoo = (dateObj) => {
+  if (!dateObj) return null;
+  return dateObj.toISOString().replace('T', ' ').split('.')[0];
+};
+
+export default function TaskDetailModal({ visible, task, allTasks, onClose, onTaskUpdated }) {
+  const { isOnline } = useNetwork();
+  const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
+  const panY = useRef(new Animated.Value(0)).current;
+  
+  const [reprogramming, setReprogramming] = useState(false);
+  const [newDate, setNewDate] = useState(new Date());
+  const [showPicker, setShowPicker] = useState(false);
+  const [reason, setReason] = useState('');
+  const [managementTags, setManagementTags] = useState([]);
+  const [isUserOwnTask, setIsUserOwnTask] = useState(false);
+  
+  const [taskSurveys, setTaskSurveys] = useState([]);
+  const [loadingSurveys, setLoadingSurveys] = useState(false);
+  const [selectedSurvey, setSelectedSurvey] = useState(null);
+  const [showSurveyModal, setShowSurveyModal] = useState(false);
+
+  const [showAttachmentsModal, setShowAttachmentsModal] = useState(false);
+  const [associatedLead, setAssociatedLead] = useState(null);
+  const [showLeadModal, setShowLeadModal] = useState(false);
+  
+  const [attachmentsCount, setAttachmentsCount] = useState(0);
+  const [loadingAttachments, setLoadingAttachments] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderMove: (_, gestureState) => {
+        if (gestureState.dy > 0) {
+          panY.setValue(gestureState.dy);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dy > 100) {
+          closeModal();
+        } else {
+          Animated.spring(panY, {
+            toValue: 0,
+            useNativeDriver: true,
+            bounciness: 8,
+          }).start();
+        }
+      },
+    })
+  ).current;
+
+  useEffect(() => {
+    if (task) {
+      checkIfUserOwnTask();
+      loadAssociatedLead();
+      loadAttachmentsCount();
+    }
+  }, [task]);
+
+  useEffect(() => {
+    if (visible && task) {
+      setReprogramming(false);
+      setReason('');
+      loadTags();
+      loadSurveys();
+      
+      if (task.date_deadline) {
+        const parsedDate = parseOdooDate(task.date_deadline);
+        setNewDate(parsedDate);
+      } else {
+        setNewDate(new Date());
+      }
+
+      panY.setValue(0);
+      Animated.spring(slideAnim, {
+        toValue: SCREEN_HEIGHT - MODAL_HEIGHT,
+        useNativeDriver: true,
+        damping: 20,
+        mass: 1,
+        stiffness: 100,
+      }).start();
+    } else {
+      Animated.timing(slideAnim, {
+        toValue: SCREEN_HEIGHT,
+        duration: 250,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [visible, task]);
+
+  const loadAssociatedLead = async () => {
+    if (!task || !task.id) return;
+    try {
+      const lead = await SyncService.getLeadByTaskId(task.id);
+      setAssociatedLead(lead);
+    } catch (error) {
+      console.error('Error cargando lead asociada:', error);
+      setAssociatedLead(null);
+    }
+  };
+
+  const loadAttachmentsCount = async () => {
+    if (!task || !task.id) return;
+    try {
+      setLoadingAttachments(true);
+      const attachments = await SyncService.getTaskAttachments(task.id);
+      setAttachmentsCount(attachments.length);
+    } catch (error) {
+      console.error('Error cargando adjuntos:', error);
+      setAttachmentsCount(0);
+    } finally {
+      setLoadingAttachments(false);
+    }
+  };
+
+  const getReprogrammingRange = () => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+
+    let minDate;
+    if (task.start_date) {
+      minDate = parseOdooDate(task.start_date); 
+    } else {
+      minDate = new Date(currentYear, currentMonth, 1);
+    }
+    minDate.setHours(0, 0, 0, 0);
+
+    let maxDate;
+    if (task.finish_date) {
+      maxDate = parseOdooDate(task.finish_date);
+    } else {
+      maxDate = new Date(currentYear, currentMonth + 1, 0);
+    }
+    maxDate.setHours(23, 59, 59, 999);
+
+    return { minDate, maxDate };
+  };
+
+  const loadSurveys = async () => {
+    if (!task || !task.id) return;
+    try {
+      setLoadingSurveys(true);
+      const surveys = await SyncService.getSurveysForTask(task.id);
+      
+      const enrichedSurveys = await Promise.all(surveys.map(async (s) => {
+        const localProgress = await SyncService.getSurveyProgress(task.id, s.id, s.relation_id);
+        let isCompleted = false;
+        if (s.survey_user_input_id) isCompleted = true;
+        if (localProgress && localProgress.state === 'done') isCompleted = true;
+
+        return {
+          ...s,
+          isCompleted,
+          localProgress,
+        };
+      }));
+
+      setTaskSurveys(enrichedSurveys);
+    } catch (error) {
+      console.error("Error cargando encuestas:", error);
+    } finally {
+      setLoadingSurveys(false);
+    }
+  };
+
+  const loadTags = async () => {
+    try {
+      const tags = await SyncService.getManagementTags();
+      setManagementTags(tags);
+    } catch (e) {
+      console.error('Error cargando tags:', e);
+    }
+  };
+
+  const checkIfUserOwnTask = async () => {
+    try {
+      const currentUser = await SyncService.getCurrentUser();
+      const currentUserPartnerId = currentUser && currentUser[0] && currentUser[0].partner_id 
+        ? currentUser[0].partner_id[0] 
+        : null;
+      
+      const taskPartnerId = task.partner_id && 
+        (Array.isArray(task.partner_id) ? task.partner_id[0] : task.partner_id);
+      
+      setIsUserOwnTask(taskPartnerId === currentUserPartnerId);
+    } catch (error) {
+      console.error('Error verificando propietario:', error);
+      setIsUserOwnTask(false);
+    }
+  };
+
+  const closeModal = () => {
+    Animated.timing(slideAnim, {
+      toValue: SCREEN_HEIGHT,
+      duration: 250,
+      useNativeDriver: true,
+    }).start(() => onClose());
+  };
+
+  if (!task) return null;
+  const totalSurveys = taskSurveys.length;
+  const completedSurveys = taskSurveys.filter(s => s.isCompleted).length;
+  const hasSurveys = totalSurveys > 0;
+  const allSurveysDone = hasSurveys && totalSurveys === completedSurveys;
+
+  const handleOpenSurvey = (survey) => {
+    setSelectedSurvey({ 
+      surveyId: survey.id, 
+      relationId: survey.relation_id,
+    });
+    setShowSurveyModal(true);
+  };
+
+  const handleCompleteTask = async () => {
+    try {
+      await SyncService.updateTaskLocally(task.id, { state: '1_done' });
+      
+      if (isOnline) {
+        setSyncing(true);
+        try {
+          await SyncService.syncPendingChanges();
+          Alert.alert(
+            '✓ Tarea completada', 
+            'La tarea se ha marcado como finalizada y sincronizado con el servidor.'
+          );
+        } catch (syncError) {
+          console.warn('⚠️ Error sincronizando (cambio guardado localmente):', syncError);
+          Alert.alert(
+            '✓ Tarea completada (offline)', 
+            'La tarea se ha marcado como finalizada.\n\nSe sincronizará cuando recuperes la conexión.'
+          );
+        } finally {
+          setSyncing(false);
+        }
+      } else {
+        Alert.alert(
+          '✓ Tarea completada (offline)', 
+          'La tarea se ha marcado como finalizada.\n\nSe sincronizará automáticamente cuando recuperes la conexión.'
+        );
+      }
+      
+      if (onTaskUpdated) onTaskUpdated();
+      closeModal();
+    } catch (error) {
+      console.error('Error completando tarea:', error);
+      Alert.alert('Error', 'No se pudo completar la tarea.');
+    }
+  };
+
+  const handleTaskAction = () => {
+    if (task.state === '1_done') {
+      Alert.alert('Información', 'Esta tarea ya ha sido completada.');
+      return;
+    }
+    if (hasSurveys && !allSurveysDone) {
+      Alert.alert(
+        "Encuestas pendientes",
+        `Debes completar las ${totalSurveys - completedSurveys} encuestas restantes antes de finalizar la tarea.`,
+        [{ text: "Entendido", style: "cancel" }]
+      );
+      return;
+    }
+    if (isUserOwnTask) {
+      showStateChangeOptions();
+      return;
+    }
+    
+    Alert.alert(
+      'Completar Tarea',
+      hasSurveys 
+        ? 'Todas las encuestas están completas. ¿Marcar esta tarea como finalizada?'
+        : '¿Deseas marcar esta tarea como finalizada?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Completar', 
+          style: 'default',
+          onPress: handleCompleteTask 
+        }
+      ]
+    );
+  };
+
+  const getStatusInfo = () => {
+    const s = task.state;
+    if (s === '01_in_progress') return { label: 'En Proceso', color: '#64c27b', icon: 'play' };
+    if (s === '02_changes_requested') return { label: 'Cambios Solic.', color: '#F59E0B', icon: 'alert-circle' };
+    if (s === '03_approved') return { label: 'Aprobado', color: '#10B981', icon: 'check-circle' };
+    if (s === '1_done') return { label: 'Hecho', color: '#22c55e', icon: 'check' };
+    if (s === '1_canceled') return { label: 'Cancelado', color: '#EF4444', icon: 'x-circle' };
+    if (s === '04_waiting_normal') return { label: 'En Espera', color: '#9CA3AF', icon: 'clock' };
+    return { label: 'Desconocido', color: '#9CA3AF', icon: 'help-circle' };
+  };
+
+  const getPriorityInfo = () => {
+    const p = task.priority_level || 'baja';
+    if (p === 'alta') return { label: 'Prioridad Alta', color: '#EF4444', icon: 'alert-triangle' };
+    if (p === 'media') return { label: 'Prioridad Media', color: '#F59E0B', icon: 'minus' };
+    return { label: 'Prioridad Baja', color: '#64c27b', icon: 'chevron-down' };
+  };
+
+  const getTagNames = () => {
+    if (!Array.isArray(task.management_tags) || task.management_tags.length === 0) {
+        return [];
+    }
+    return managementTags.filter(tag => task.management_tags.includes(tag.id));
+  };
+
+  const handleReprogram = async () => {
+    if (!reason.trim()) {
+      Alert.alert("Razón requerida", "Debes proporcionar una razón para la reprogramación");
+      return;
+    }
+    await processReschedule();
+  };
+
+  const processReschedule = async () => {
+    const { minDate, maxDate } = getReprogrammingRange();
+    
+    const selectedTime = newDate.getTime();
+    const minTime = minDate.getTime();
+    const maxTime = maxDate.getTime();
+
+    if (selectedTime < minTime) {
+      Alert.alert("Fecha inválida", `No puedes reprogramar antes del ${minDate.toLocaleDateString('es-ES')}.`);
+      return;
+    }
+
+    if (selectedTime > maxTime) {
+      Alert.alert("Fecha inválida", `No puedes reprogramar después del ${maxDate.toLocaleDateString('es-ES')}.`);
+      return;
+    }
+
+    const utcDateStr = formatForOdoo(newDate);
+    
+    try {
+      await SyncService.updateTaskLocally(task.id, { date_deadline: utcDateStr });
+      
+      await SyncService.createReasonWizard(
+        'reason.wizard',
+        {
+          task_id: task.id,
+          new_date: utcDateStr,
+          old_date: task.date_deadline,
+          reason: reason
+        }
+      );
+
+      if (isOnline) {
+        setSyncing(true);
+        try {
+          await SyncService.syncPendingChanges();
+          Alert.alert("✓ Reprogramada", "La tarea se ha actualizado y sincronizado con el servidor.");
+        } catch (syncError) {
+          console.warn('⚠️ Error sincronizando:', syncError);
+          Alert.alert("✓ Reprogramada (offline)", "La tarea se actualizará en el servidor cuando recuperes la conexión.");
+        } finally {
+          setSyncing(false);
+        }
+      } else {
+        Alert.alert("✓ Reprogramada (offline)", "La tarea se actualizará en el servidor cuando recuperes la conexión.");
+      }
+      
+      setReprogramming(false);
+      setReason('');
+      if (onTaskUpdated) onTaskUpdated();
+    } catch (e) {
+      console.error(e);
+      Alert.alert("Error", "No se pudo reprogramar");
+    }
+  };
+
+  const showStateChangeOptions = () => {
+    const stateOptions = [
+      { id: '01_in_progress', name: 'En Proceso' },
+      { id: '02_changes_requested', name: 'Cambios Solicitados' },
+      { id: '03_approved', name: 'Aprobado' },
+      { id: '1_done', name: 'Finalizado' },
+      { id: '1_canceled', name: 'Cancelado' },
+      { id: '04_waiting_normal', name: 'En Espera' },
+    ];
+    const currentState = task.state;
+    const options = stateOptions.map(opt => ({
+      text: `${opt.name}${opt.id === currentState ? ' (Actual)' : ''}`,
+      onPress: () => handleStateChange(opt.id),
+      style: opt.id === currentState ? 'cancel' : 'default'
+    }));
+    options.push({ text: 'Cancelar', style: 'cancel' });
+    Alert.alert('Cambiar Estado', 'Selecciona el nuevo estado para esta tarea:', options);
+  };
+
+  const handleStateChange = async (newState) => {
+    if (newState === task.state) return;
+    
+    try {
+      await SyncService.updateTaskLocally(task.id, { state: newState });
+      
+      if (isOnline) {
+        setSyncing(true);
+        try {
+          await SyncService.syncPendingChanges();
+          Alert.alert('✓ Estado actualizado', 'El cambio se ha sincronizado con el servidor.');
+        } catch (syncError) {
+          console.warn('⚠️ Error sincronizando:', syncError);
+          Alert.alert('✓ Estado actualizado (offline)', 'El cambio se sincronizará cuando recuperes la conexión.');
+        } finally {
+          setSyncing(false);
+        }
+      } else {
+        Alert.alert('✓ Estado actualizado (offline)', 'El cambio se sincronizará cuando recuperes la conexión.');
+      }
+      
+      if (onTaskUpdated) onTaskUpdated();
+    } catch (error) {
+      console.error('Error actualizando estado:', error);
+      Alert.alert('Error', 'No se pudo actualizar el estado de la tarea.');
+    }
+  };
+
+  const handleSurveyComplete = async () => {
+    setShowSurveyModal(false);
+    await loadSurveys();
+  };
+
+  const statusInfo = getStatusInfo();
+  const priorityInfo = getPriorityInfo();
+  const taskTags = getTagNames();
+  const cleanDescription = stripHtml(task.description);
+
+  const { minDate, maxDate } = getReprogrammingRange();
+
+  const displayDeadline = task.date_deadline 
+    ? parseOdooDate(task.date_deadline).toLocaleString('es-ES', {
+        weekday: 'long',
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      }) 
+    : 'Sin asignar';
+
+  const InfoRow = ({ icon, label, value, colorOverride }) => {
+    if (!value || value === '-') return null;
+    return (
+      <View style={styles.infoRow}>
+        <View style={[styles.iconContainer, colorOverride && { backgroundColor: colorOverride + '20' }]}>
+          <Feather name={icon} size={18} color={colorOverride || "#64c27b"} />
+        </View>
+        <View style={styles.infoContent}>
+          <Text style={styles.infoLabel}>{label}</Text>
+          <Text style={[styles.infoValue, colorOverride && { color: colorOverride }]}>{value}</Text>
+        </View>
+      </View>
+    );
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="none" onRequestClose={closeModal}>
+      <View style={styles.overlay}>
+        {showSurveyModal && selectedSurvey && (
+          <SurveyModal
+            visible={showSurveyModal}
+            taskId={task.id}
+            surveyId={selectedSurvey.surveyId}
+            relationId={selectedSurvey.relationId}
+            onClose={() => setShowSurveyModal(false)}
+            onComplete={handleSurveyComplete}
+          />
+        )}
+        <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={closeModal} />
+        
+        <Animated.View
+          style={[
+            styles.modalContainer,
+            { transform: [{ translateY: slideAnim }, { translateY: panY }] },
+          ]}
+        >
+          <View style={styles.dragHeader} {...panResponder.panHandlers}>
+            <View style={styles.handle} />
+          </View>
+
+          <KeyboardAwareScrollView 
+            style={styles.scrollContainer} 
+            contentContainerStyle={styles.scrollContent}
+            enableOnAndroid={true}
+            extraScrollHeight={100} 
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            
+            <View style={styles.headerRow}>
+              <View style={[styles.statusBadge, { backgroundColor: statusInfo.color }]}>
+                <Feather name={statusInfo.icon} size={14} color="#fff" />
+                <Text style={styles.statusText}>{statusInfo.label}</Text>
+              </View>
+
+              <View style={[styles.priorityBadge, { borderColor: priorityInfo.color }]}>
+                <Feather name={priorityInfo.icon} size={14} color={priorityInfo.color} />
+                <Text style={[styles.priorityText, { color: priorityInfo.color }]}>
+                  {priorityInfo.label}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.titleRow}>
+              <Text style={styles.title}>{task.display_name || task.name}</Text>
+              
+              <TouchableOpacity 
+                style={styles.attachmentsIconButton}
+                onPress={() => setShowAttachmentsModal(true)}
+                activeOpacity={0.7}
+              >
+                <Feather name="paperclip" size={22} color="#64c27b" />
+                {attachmentsCount > 0 && (
+                  <View style={styles.attachmentsBadge}>
+                    <Text style={styles.attachmentsBadgeText}>{attachmentsCount}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            </View>
+            
+            {associatedLead && (
+              <TouchableOpacity 
+                style={styles.leadTag}
+                onPress={() => setShowLeadModal(true)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.leadTagLeft}>
+                  <Feather name="briefcase" size={14} color="#3B82F6" />
+                  <Text style={styles.leadTagText}>
+                    Oportunidad: {associatedLead.name}
+                  </Text>
+                </View>
+                <Feather name="external-link" size={14} color="#3B82F6" />
+              </TouchableOpacity>
+            )}
+            
+            {taskTags.length > 0 && (
+              <View style={styles.tagsContainer}>
+                {taskTags.map((tag) => (
+                  <View key={tag.id} style={styles.tagChip}>
+                    <Feather name="tag" size={12} color="#64c27b" />
+                    <Text style={styles.tagText}>{tag.name}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {loadingSurveys ? (
+              <ActivityIndicator style={{ marginVertical: 20 }} size="small" color="#64c27b" />
+            ) : hasSurveys && (
+              <View style={styles.surveysSection}>
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionTitle}>ENCUESTAS ASIGNADAS</Text>
+                  <View style={[
+                    styles.counterBadge, 
+                    allSurveysDone ? styles.counterBadgeDone : styles.counterBadgePending
+                  ]}>
+                    <Text style={[
+                      styles.counterText,
+                      allSurveysDone ? styles.counterTextDone : styles.counterTextPending
+                    ]}>
+                      {completedSurveys}/{totalSurveys} Completadas
+                    </Text>
+                  </View>
+                </View>
+
+                <ScrollView 
+                  horizontal 
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.surveyListContent}
+                >
+                  {taskSurveys.map((survey, index) => (
+                    <TouchableOpacity 
+                      key={survey.relation_id || `${survey.id}-${index}`}
+                      style={[
+                        styles.surveyCard,
+                        survey.isCompleted ? styles.surveyCardDone : styles.surveyCardPending
+                      ]}
+                      onPress={() => handleOpenSurvey(survey)}
+                    >
+                      <View style={styles.surveyCardTop}>
+                        <Feather 
+                          name={survey.isCompleted ? "check-circle" : "clipboard"} 
+                          size={24} 
+                          color={survey.isCompleted ? "#10B981" : "#F59E0B"} 
+                        />
+                        {survey.isCompleted && (
+                            <View style={styles.editBadge}>
+                                <Feather name="edit-2" size={10} color="#15803d" />
+                                <Text style={styles.editBadgeText}>Editar</Text>
+                            </View>
+                        )}
+                      </View>
+                      
+                      <Text style={styles.surveyTitle} numberOfLines={2}>
+                        {survey.title}
+                      </Text>
+                      
+                      <Text style={styles.surveyStatusText}>
+                        {survey.isCompleted ? "Completada" : "Pendiente"}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+            
+            <View style={styles.divider} />
+
+            <Text style={styles.sectionTitle}>Datos de la Tarea</Text>
+            <InfoRow 
+              icon="user" 
+              label="Cliente" 
+              value={Array.isArray(task.partner_id) ? task.partner_id[1] : '-'} 
+            />
+            <InfoRow 
+              icon="briefcase" 
+              label="Proyecto" 
+              value={Array.isArray(task.project_id) ? task.project_id[1] : '-'} 
+            />
+
+            <View style={styles.divider} />
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Planificación</Text>
+              {!reprogramming && task.state !== '1_done' && (
+                <TouchableOpacity 
+                  style={styles.reprogramButton}
+                  onPress={() => setReprogramming(true)}
+                >
+                  <Feather name="edit-2" size={16} color="#64c27b" />
+                  <Text style={styles.reprogramButtonText}>Reprogramar</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {reprogramming ? (
+              <View style={styles.reprogramContainer}>
+                <Text style={styles.reprogramTitle}>Selecciona nueva fecha y hora</Text>
+                
+                <View style={styles.rangeInfoContainer}>
+                  <Feather name="info" size={14} color="#6B7280" />
+                  <Text style={styles.rangeInfoText}>
+                    Rango permitido: {minDate.toLocaleDateString('es-ES', {day: '2-digit', month:'2-digit'})} al {maxDate.toLocaleDateString('es-ES', {day: '2-digit', month:'2-digit'})}
+                  </Text>
+                </View>
+                
+                <TouchableOpacity 
+                    style={styles.datePickerButton} 
+                    onPress={() => setShowPicker(true)}
+                  >
+                    <View style={styles.datePickerLeft}>
+                      <Feather name="calendar" size={20} color="#64c27b" />
+                      <View style={styles.datePickerTextContainer}>
+                        <Text style={styles.datePickerDate}>
+                          {newDate.toLocaleDateString('es-ES', { 
+                            weekday: 'long',
+                            day: '2-digit', 
+                            month: 'long',
+                            year: 'numeric'
+                          })}
+                        </Text>
+                        <Text style={styles.datePickerTime}>
+                          {newDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
+                        </Text>
+                      </View>
+                    </View>
+                    <Feather name="chevron-down" size={20} color="#9CA3AF" />
+                  </TouchableOpacity>
+
+                  <SimpleDateTimePicker 
+                    visible={showPicker}
+                    onClose={() => setShowPicker(false)}
+                    selectedDate={newDate}
+                    onConfirm={setNewDate}
+                    minDate={minDate}
+                    maxDate={maxDate}
+                    mode="datetime"
+                  />
+                  
+                  <View style={styles.reasonField}>
+                    <Text style={styles.reasonLabel}>
+                      Razón de la reprogramación <Text style={styles.required}>*</Text>
+                    </Text>
+                    <TextInput
+                      style={styles.reasonInput}
+                      value={reason}
+                      onChangeText={setReason}
+                      placeholder="Explica por qué reprogramas esta tarea..."
+                      placeholderTextColor="#9CA3AF"
+                      multiline
+                      numberOfLines={3}
+                      textAlignVertical="top"
+                      maxLength={500}
+                    />
+                  </View>
+
+                  <View style={styles.reprogramActions}>
+                    <TouchableOpacity 
+                      style={[styles.actionButton, styles.actionButtonCancel]} 
+                      onPress={() => setReprogramming(false)}
+                    >
+                      <Text style={styles.actionButtonCancelText}>Cancelar</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                      style={[styles.actionButton, styles.actionButtonConfirm]} 
+                      onPress={handleReprogram}
+                    >
+                      <Feather name="check" size={16} color="#fff" />
+                      <Text style={styles.actionButtonConfirmText}>Confirmar</Text>
+                    </TouchableOpacity>
+                  </View>
+              </View>
+            ) : (
+              <>
+                <InfoRow 
+                  icon="calendar" 
+                  label="Fecha de Ejecución" 
+                  value={displayDeadline} 
+                />
+                
+                <InfoRow 
+                    icon="flag" 
+                    label="Fin del Periodo"
+                    value={maxDate.toLocaleDateString('es-ES', {
+                      day: '2-digit',
+                      month: 'long',
+                      year: 'numeric'
+                    })}
+                    colorOverride="#F59E0B"
+                  />
+              </>
+            )}
+
+            {cleanDescription && (
+              <>
+                <View style={styles.divider} />
+                <Text style={styles.sectionTitle}>Descripción</Text>
+                <View style={styles.descriptionBox}>
+                  <Text style={styles.descriptionText}>{cleanDescription}</Text>
+                </View>
+              </>
+            )}
+
+            {task.state !== '1_done' && (
+              <>
+                <View style={styles.divider} />
+                <TouchableOpacity 
+                  style={[
+                    styles.completeTaskButton,
+                    ((hasSurveys && allSurveysDone) || (!hasSurveys && !isUserOwnTask)) && styles.completeTaskButtonReady,
+                    (hasSurveys && !allSurveysDone) && styles.completeTaskButtonWarning,
+                    (!hasSurveys && isUserOwnTask) && styles.completeTaskButtonOwn,
+                  ]}
+                  onPress={handleTaskAction}
+                >
+                  <Feather 
+                    name={
+                      hasSurveys && !allSurveysDone ? "alert-circle" :
+                      (!hasSurveys && isUserOwnTask) ? "edit" :
+                      "check-circle"
+                    } 
+                    size={20} 
+                    color="#fff" 
+                  />
+                  <Text style={styles.completeTaskButtonText}>
+                    {hasSurveys && !allSurveysDone 
+                      ? `Pendientes: ${totalSurveys - completedSurveys} encuestas` 
+                      : (!hasSurveys && isUserOwnTask)
+                      ? 'Cambiar Estado'
+                      : 'Completar Tarea'}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            <View style={styles.divider} />
+            <View style={styles.commentsSection}>
+              <CommentsSection taskId={task.id} visible={visible} />
+            </View>
+
+            <AttachmentsModal
+              visible={showAttachmentsModal}
+              taskId={task.id}
+              onClose={() => setShowAttachmentsModal(false)}
+            />
+
+            <View style={{ height: 60 }} />
+          </KeyboardAwareScrollView>
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  attachmentsBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#EF4444',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  attachmentsBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#fff',
+  },
+
+  leadTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#EFF6FF',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  leadTagLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: 8,
+  },
+  leadTagText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#3B82F6',
+    flex: 1,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  attachmentsIconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#f0fdf4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 12,
+  },
+  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0, 0, 0, 0.4)' },
+  backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  modalContainer: { 
+    height: MODAL_HEIGHT, 
+    backgroundColor: '#fff', 
+    borderTopLeftRadius: 24, 
+    borderTopRightRadius: 24, 
+    overflow: 'hidden',
+    shadowColor: "#000", 
+    shadowOffset: { width: 0, height: -2 }, 
+    shadowOpacity: 0.25, 
+    shadowRadius: 4, 
+    elevation: 5,
+    paddingBottom: 30,
+  },
+  dragHeader: { 
+    width: '100%', 
+    height: 40, 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    backgroundColor: '#fff', 
+    borderBottomWidth: 1, 
+    borderBottomColor: '#f3f4f6' 
+  },
+  handle: { width: 48, height: 5, backgroundColor: '#E5E7EB', borderRadius: 3 },
+  scrollContainer: { flex: 1 },
+  scrollContent: { padding: 24, paddingBottom: 40 },
+  headerRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  statusBadge: { 
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12, 
+    paddingVertical: 6, 
+    borderRadius: 12,
+    gap: 6,
+  },
+  statusText: { fontSize: 12, fontWeight: '700', color: '#fff' },
+  priorityBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    backgroundColor: '#fff',
+    gap: 6,
+  },
+  priorityText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  title: { fontSize: 22, fontWeight: '700', color: '#111827', marginBottom: 8, lineHeight: 28 },
+  tagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
+  },
+  tagChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0fdf4',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#86efac',
+  },
+  tagText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#15803d',
+  },
+  divider: { height: 1, backgroundColor: '#F3F4F6', marginVertical: 20 },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  sectionTitle: { fontSize: 12, fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.5 },
+  reprogramButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#f0fdf4',
+    borderRadius: 6,
+  },
+  reprogramButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64c27b',
+  },
+  infoRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  iconContainer: { 
+    width: 40, 
+    height: 40, 
+    borderRadius: 20, 
+    backgroundColor: '#f0fdf4', 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    marginRight: 16 
+  },
+  infoContent: { flex: 1 },
+  infoLabel: { fontSize: 11, color: '#9CA3AF', marginBottom: 2, fontWeight: '600', textTransform: 'uppercase' },
+  infoValue: { fontSize: 15, color: '#1F2937', fontWeight: '500', lineHeight: 20 },
+  descriptionBox: { backgroundColor: '#F9FAFB', padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB' },
+  descriptionText: { fontSize: 14, color: '#374151', lineHeight: 20 },
+  reprogramContainer: {
+    backgroundColor: '#F9FAFB',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  reprogramTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 12,
+  },
+  rangeInfoContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 6,
+  },
+  rangeInfoText: {
+    fontSize: 12,
+    color: '#6B7280',
+    fontStyle: 'italic',
+  },
+  datePickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    padding: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    marginBottom: 16,
+  },
+  datePickerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  datePickerTextContainer: {
+    marginLeft: 12,
+  },
+  datePickerDate: {
+    fontSize: 15,
+    color: '#111827',
+    fontWeight: '500',
+    textTransform: 'capitalize',
+  },
+  datePickerTime: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  reasonField: {
+    marginTop: 16,
+  },
+  reasonLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  required: {
+    color: '#EF4444',
+  },
+  reasonInput: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 14,
+    color: '#111827',
+    height: 80,
+  },
+  reprogramActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+  },
+  actionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderRadius: 8,
+    gap: 6,
+  },
+  actionButtonCancel: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+  },
+  actionButtonCancelText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  actionButtonConfirm: {
+    backgroundColor: '#64c27b',
+  },
+  actionButtonConfirmText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  completeTaskButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#10B981',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    gap: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  completeTaskButtonWarning: {
+    backgroundColor: '#F59E0B',
+  },
+  completeTaskButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  commentsSection: {
+    minHeight: 300,
+    maxHeight: 500,
+  },
+  surveysSection: {
+    marginTop: 10,
+  },
+  counterBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  counterBadgePending: { backgroundColor: '#FEF3C7' },
+  counterBadgeDone: { backgroundColor: '#D1FAE5' },
+  counterText: { fontSize: 11, fontWeight: '700' },
+  counterTextPending: { color: '#B45309' },
+  counterTextDone: { color: '#047857' },
+  surveyListContent: {
+    paddingRight: 20,
+  },
+  surveyCard: {
+    width: 140,
+    height: 110,
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    marginRight: 12,
+  },
+  surveyCardPending: {
+    borderColor: '#FCD34D',
+    backgroundColor: '#FFFBEB',
+  },
+  surveyCardDone: {
+    borderColor: '#6EE7B7',
+    backgroundColor: '#ECFDF5',
+  },
+  surveyCardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  surveyTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+    marginTop: 8,
+  },
+  surveyStatusText: {
+    fontSize: 10,
+    fontWeight: '500',
+    color: '#6B7280',
+    marginTop: 4,
+  },
+  editBadge: {
+      flexDirection: 'row', 
+      alignItems: 'center', 
+      backgroundColor: '#fff', 
+      paddingHorizontal: 4, 
+      paddingVertical: 2, 
+      borderRadius: 4
+  },
+  editBadgeText: { fontSize: 9, color: '#15803d', marginLeft: 2, fontWeight: 'bold' },
+  completeTaskButtonReady: {
+    backgroundColor: '#10B981',
+  },
+  completeTaskButtonOwn: {
+    backgroundColor: '#3B82F6',
+  },
+});

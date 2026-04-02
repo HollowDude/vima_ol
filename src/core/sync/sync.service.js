@@ -1,0 +1,219 @@
+import * as Surveys from './sync.surveys';
+import * as Pending from './sync.pending';
+import * as Tasks from './sync.tasks';
+import * as Master from './sync.masterdata';
+import * as Clients from './sync.clients';
+import * as Leads from './sync.leads';
+import * as Utils from './sync.utils';
+import * as Session from './sync.session';
+import * as Comments from './sync.comments';
+import * as Attachments from './sync.attachments';
+import { STORAGE_KEYS } from './sync.constants';
+import StorageService from '../storage/storage.service';
+import OdooService from '../api/odoo.service';
+
+class SyncService {
+  constructor() {}
+
+  async syncAll() {
+    try {
+      // 1. Sincronizo Maestros y detecta cambio
+      const { projectChanged, oldProject } = await this.syncMasterData();
+
+      // 2. Lógica del 25 con persistencia
+      const now = new Date();
+      const dayOfMonth = now.getDate();
+      const isLateMonth = dayOfMonth > 25;
+      
+      let projectToKeepId = null;
+
+      if (isLateMonth) {
+        // Esta en periodo de transición (> día 25)
+
+        if (projectChanged && oldProject) {
+            // A: Acaba de cambiar el proyecto. Guardo el viejo para el futuro
+            console.log(`📅 Cambio post-día 25. Guardando ID proyecto anterior: ${oldProject.display_name}`);
+            await StorageService.setItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID, oldProject.id);
+            projectToKeepId = oldProject.id;
+        } else {
+            // B: No cambió AHORA, pero verifica si hay uno guardado de un sync anterior
+            const savedPrevId = await StorageService.getItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID);
+            if (savedPrevId) {
+                console.log(`📅 Manteniendo tareas del proyecto anterior (Persistido ID: ${savedPrevId})`);
+                projectToKeepId = savedPrevId;
+            }
+        }
+      } else {
+        // Esta antes del día 25 (ej. día 10). Se acabó el periodo de gracia
+        // Borra el ID guardado y limpia caché si hubo cambio.
+        await StorageService.removeItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID);
+
+        if (projectChanged) {
+            console.log('🧹 Cambio de proyecto estándar (<= día 25). Limpiando caché antigua...');
+            await this.clearProjectCacheSafe();
+        }
+      }
+
+      // 3. Enviar Pendientes
+      try {
+        await this.syncPendingChanges();
+        console.log('✅ Cambios pendientes enviados');
+      } catch (pendingError) {
+        console.warn('⚠️ Error en cambios pendientes (continuando):', pendingError);
+      }
+
+      // 4. Sincronizar Entidades
+      const [clientsResult, tasksResult, leadsResult] = await Promise.all([
+        this.syncClients(),
+        this.syncTasks(projectToKeepId), // PASo EL ID VIEJO SI APLICA
+        this.syncLeads() 
+      ]);
+
+      await Comments.syncComments(); 
+      const surveysResult = await this.syncSurveys();
+      await this.syncAttachments();
+
+      // Guardar timestamp
+      try {
+        await StorageService.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
+      } catch (e) {}
+
+      return {
+        clients: clientsResult,
+        macrotasks: (tasksResult && tasksResult.macrotasks) ? tasksResult.macrotasks : [],
+        subtasks: (tasksResult && tasksResult.subtasks) ? tasksResult.subtasks : [],
+        surveys: surveysResult || [],
+        leads: leadsResult || [],
+        syncedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      console.error('❌ Error en syncAll:', error);
+      throw error;
+    }
+  }
+
+  // Comentarios
+  async getTaskComments(...args) {return Comments.getTaskComments(...args); }
+  async createCommentLocally(...args) { return Comments.createCommentLocally(...args); }
+
+  // Encuestas
+  async syncSurveys() { return Surveys.syncSurveys(); }
+  async getSurveyById(...args) { return Surveys.getSurveyById(...args); }
+  async getSurveyQuestions(...args) { return Surveys.getSurveyQuestions(...args); }
+  async getSurveyProgress(...args) { return Surveys.getSurveyProgress(...args); }
+  async saveSurveyProgress(...args) { return Surveys.saveSurveyProgress(...args); }
+  async completeSurvey(...args) { return Surveys.completeSurvey(...args); }
+  async syncSurveyResponses(...args) { return Surveys.syncSurveyResponses(...args); }
+
+  // Pendientes
+  async syncPendingChanges() {
+    try {
+      const surveyResult = await Surveys.syncSurveyResponses();
+      const otherResult = await Pending.syncPendingChangesNonSurvey();
+      return { surveyResult, otherResult };
+    } catch (error) {
+      console.error('❌ Error en syncPendingChanges:', error);
+      throw error;
+    }
+  }
+  async addPendingChange(model, recordId, updates) { return Pending.addPendingChange(model, recordId, updates); }
+  async createReasonWizard(model, wizardData) { return Pending.createReasonWizard(model, wizardData); }
+
+  // Tareas
+  async createTaskLocally(taskData) { return Tasks.createTaskLocally(taskData); }
+  async updateTaskLocally(taskId, updates, opts) { return Tasks.updateTaskLocally(taskId, updates, opts); }
+  async getSurveysForTask(taskId) {return Surveys.getSurveysForTask(taskId); }
+  async syncTasks(extraProjectId) { return Tasks.syncTasks(extraProjectId); }
+  async syncAllTasks(userId) { return Tasks.syncAllTasks(userId); }
+  async getAllVisibleTasks() { return Tasks.getAllVisibleTasks(); }
+  async replaceLocalTaskId(tempId, realId) { return Tasks.replaceLocalTaskId(tempId, realId); }
+
+  // Maestros
+  async syncMasterData() { return Master.syncMasterData(); }
+  async getMasterData(type) { return Master.getMasterData(type); }
+  async getManagementTags() { return Master.getManagementTags(); }
+  async getCrmStages() { return Master.getCrmStages(); }
+
+  // Clientes
+  async syncClients() { return Clients.syncClients(); }
+  async getLocalClients() { return Clients.getLocalClients(); }
+  async getLocalMacrotasks() { return Clients.getLocalMacrotasks(); }
+  async getLocalSubtasks() { return Clients.getLocalSubtasks(); }
+  async getLastSyncDate() { return Clients.getLastSyncDate(); }
+  async updateClientLocally(clientId, updates, opts) { return Clients.updateClientLocally(clientId, updates, opts); }
+
+  // Leads
+  async syncLeads() { return Leads.syncLeads(); }
+  async getLocalLeads() { return Leads.getLocalLeads(); }
+  async createLeadLocally(leadData) { return Leads.createLeadLocally(leadData); }
+  async updateLeadLocally(leadId, updates, opts) { return Leads.updateLeadLocally(leadId, updates, opts); }
+  async deleteLeadLocally(leadId) { return Leads.deleteLeadLocally(leadId); } // 🔥 NUEVO
+  async getLeadTasks(leadId) { return Leads.getLeadTasks(leadId); }
+  async associateTaskToLead(leadId, taskId) { return Leads.associateTaskToLead(leadId, taskId); }
+  async getLeadsStatsByStage() { return Leads.getLeadsStatsByStage(); }
+  async getLeadByTaskId(taskId) { return Leads.getLeadByTaskId(taskId); }
+
+  // Utilidades
+  sanitizeForOdoo(data) { return Utils.sanitizeForOdoo(data); }
+
+  // Sesión
+  async getCurrentUser() { return Session.getCurrentUser(); }
+  async getUserId() { return Session.getUserId(); }
+  async getCurrentProject() { return Session.getCurrentProject(); }
+
+  // Adjuntos
+  async syncAttachments() {return Attachments.syncAttachments(); }
+  async getTaskAttachments(taskId) {return Attachments.getTaskAttachments(taskId); }
+  async downloadAttachment(attachmentId) {return Attachments.downloadAttachment(attachmentId); }
+  async uploadAttachment(...args) {return Attachments.uploadAttachment(...args); }
+  async deleteAttachment(attachmentId) {return Attachments.deleteAttachment(attachmentId); }
+  async clearAttachmentsCache() {return Attachments.clearAttachmentsCache(); }
+
+  async clearProjectCacheSafe() {
+    try {
+      console.log('Limpieza de caché local por cambio de proyecto...');
+      await StorageService.removeItem(STORAGE_KEYS.TASKS);
+      await StorageService.removeItem(STORAGE_KEYS.MACROTASKS);
+      await StorageService.removeItem(STORAGE_KEYS.LEADS);
+    } catch (error) {
+      console.error('Error limpiando caché de proyecto:', error);
+    }
+  }
+
+  async clearLocalData() {
+    try {
+      await StorageService.removeItem(STORAGE_KEYS.CLIENTS);
+      await StorageService.removeItem(STORAGE_KEYS.TASKS);
+      await StorageService.removeItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID);
+      await StorageService.removeItem(STORAGE_KEYS.CURRENT_PROJECT);
+      await StorageService.removeItem(STORAGE_KEYS.MACROTASKS);
+      await StorageService.removeItem(STORAGE_KEYS.LEADS);
+      await StorageService.removeItem(STORAGE_KEYS.LAST_SYNC);
+      await StorageService.removeItem(STORAGE_KEYS.PENDING_CHANGES);
+      await StorageService.removeItem(STORAGE_KEYS.SURVEYS);
+      await StorageService.removeItem(STORAGE_KEYS.SURVEY_QUESTIONS);
+      await StorageService.removeItem(STORAGE_KEYS.SURVEY_ANSWERS);
+      await StorageService.removeItem(STORAGE_KEYS.SURVEY_PROGRESS);
+    } catch (error) {
+      console.error(' Error limpiando datos locales:', error);
+    }
+  }
+
+  async clearProjectData() {
+    try {
+      await this.syncPendingChanges();
+
+      await StorageService.removeItem(STORAGE_KEYS.TASKS);
+      await StorageService.removeItem(STORAGE_KEYS.MACROTASKS);
+      await StorageService.removeItem(STORAGE_KEYS.PENDING_CHANGES);
+      await StorageService.removeItem(STORAGE_KEYS.SURVEYS);
+      await StorageService.removeItem(STORAGE_KEYS.SURVEY_QUESTIONS);
+      await StorageService.removeItem(STORAGE_KEYS.SURVEY_ANSWERS);
+      await StorageService.removeItem(STORAGE_KEYS.SURVEY_PROGRESS);
+    } catch (error) {
+      console.error(' Error limpiando caché de proyecto:', error);
+    }
+  }
+}
+
+export default new SyncService();
