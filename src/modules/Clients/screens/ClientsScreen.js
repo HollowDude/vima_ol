@@ -1,12 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  RefreshControl,
-  TextInput,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  RefreshControl, TextInput, Alert,
 } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
@@ -14,162 +9,122 @@ import Card from '../../../core/components/Card';
 import DashboardHeader from '../../../core/components/DashboardHeader';
 import ClientCard from '../../../core/components/ClientCard';
 import ClientDetailModal from '../../../core/components/ClientDetailModal';
+import ToastContainer from '../../../core/components/ToastContainer';
+import SlideMenu from '../../../core/components/SlideMenu';
+import ExpandableFAB from '../../../core/components/ExpandableFab';
 import useNetwork from '../../../core/hooks/useNetwork';
+import useSyncActions from '../../../core/hooks/useSyncActions';
 import SyncService from '../../../core/sync/sync.service';
+import { useSyncContext } from '../../../core/context/SyncContext';
 import { usePrevious } from '../../../core/hooks/usePrevious';
 
-export default function ClientsScreen({ userData, username, onBack }) {
-  const { isOnline } = useNetwork();
-  const [clients, setClients] = useState([]);
-  const [filteredClients, setFilteredClients] = useState([]);
-  const [selectedClient, setSelectedClient] = useState(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [actionStatus, setActionStatus] = useState(null);
+export default function ClientsScreen({ userData, username, onBack, onLogout }) {
+  const { isOnline }            = useNetwork();
+  const { syncAll, syncModule } = useSyncActions();
+  const { refreshPendingCount } = useSyncContext();
+
+  const [clients, setClients]                   = useState([]);
+  const [filteredClients, setFilteredClients]   = useState([]);
+  const [selectedClient, setSelectedClient]     = useState(null);
+  const [refreshing, setRefreshing]             = useState(false);
+  const [searchQuery, setSearchQuery]           = useState('');
+  const [loading, setLoading]                   = useState(false);
+  const [menuVisible, setMenuVisible]           = useState(false);
 
   const prevOnline = usePrevious(isOnline);
 
-  useEffect(() => {
-    loadClients();
-  }, []);
+  useEffect(() => { loadClients(); }, []);
 
+  // Auto-sync al reconectar
   useEffect(() => {
-      let isActive = true; 
-  
-      const handleReconnection = async () => {
-        if (prevOnline === false && isOnline === true) {
-          
-          try {
-            setActionStatus('Sincronizando...');
-            
-            await SyncService.syncAll(); 
-            
-            if (isActive) {
-              await loadClients();
-            }
-            
-          } catch (error) {
-          } finally {
-            if (isActive) {
-              setActionStatus(null);
-            }
-          }
-        }
-      };
-  
-      handleReconnection();
-  
-      return () => { isActive = false; };
-    }, [isOnline, prevOnline]); 
+    if (prevOnline === false && isOnline === true) {
+      syncAll().then(() => loadClients());
+    }
+  }, [isOnline, prevOnline]);
 
-  useEffect(() => {
-    filterClients();
-  }, [searchQuery, clients]);
-
-  const getStatusColor = () => {
-    if (!isOnline) return '#504b4bff'; 
-    if (actionStatus) return '#e8c39e'; 
-    return '#64c27b'; 
-  };
+  useEffect(() => { filterClients(); }, [searchQuery, clients]);
 
   const loadClients = async () => {
     try {
-      setActionStatus('Cargando...')
-      const localClients = await SyncService.getLocalClients();
-      setClients(localClients);
-      setFilteredClients(localClients);
-    } catch (error) {
-      console.error('❌ Error cargando clientes:', error);
-      setActionStatus(null)
+      setLoading(true);
+      const local = await SyncService.getLocalClients();
+      setClients(local);
+      setFilteredClients(local);
+    } catch (e) {
+      console.error('❌ Error cargando clientes:', e);
+    } finally {
+      setLoading(false);
     }
-    setActionStatus(null)
   };
 
+  // FIX: sube pendientes primero, luego descarga
   const handleRefresh = async () => {
-    if (!isOnline) {
-      Alert.alert('Sin conexión', 'Necesitas conexión a internet para sincronizar');
-      return;
-    }
-
+    if (!isOnline) { Alert.alert('Sin conexión', 'Necesitas internet para sincronizar'); return; }
     try {
       setRefreshing(true);
-      setActionStatus('Sincronizando...');
-      
-      const syncedClients = await SyncService.syncClients();
-      setClients(syncedClients);
-      setFilteredClients(syncedClients);
-      
-      setActionStatus(null);
-    } catch (error) {
-      console.error('❌ Error sincronizando:', error);
-      Alert.alert('Error', 'No se pudo sincronizar. Intenta de nuevo.');
-      setActionStatus(null);
+      await syncModule('clients');
+      await loadClients();
     } finally {
       setRefreshing(false);
     }
   };
 
   const filterClients = () => {
-    if (!searchQuery.trim()) {
-      setFilteredClients(clients);
-      return;
-    }
-
-    const query = searchQuery.toLowerCase();
-    const filtered = clients.filter(client => {
-      const name = (client.name || '').toLowerCase().includes(query);
-      const email = (client.email || '').toLowerCase().includes(query);
-      const phone = client.phone || '';
-      const mobile = client.mobile || '';
-      
-      return name || 
-             email || 
-             phone.includes(query) || 
-             mobile.includes(query);
-    });
-    
-    setFilteredClients(filtered);
+    if (!searchQuery.trim()) { setFilteredClients(clients); return; }
+    const q = searchQuery.toLowerCase();
+    setFilteredClients(clients.filter(c =>
+      (c.name   || '').toLowerCase().includes(q) ||
+      (c.email  || '').toLowerCase().includes(q) ||
+      (c.phone  || '').includes(q) ||
+      (c.mobile || '').includes(q)
+    ));
   };
 
-  const handleClientUpdated = (updatedClient) => {
-    // Actualizar la lista local de clientes
-    const updatedList = clients.map(c => 
-      c.id === updatedClient.id ? updatedClient : c
-    );
-    setClients(updatedList);
-    
-    // Actualizar filtrados también
-    const updatedFiltered = filteredClients.map(c => 
-      c.id === updatedClient.id ? updatedClient : c
-    );
-    setFilteredClients(updatedFiltered);
+  const handleCloseClientModal = async (updated) => {
+    setSelectedClient(null);
+    // Verificar si el modal dejó cambios pendientes y actualizar el header
+    await refreshPendingCount();
   };
+
+  const handleClientUpdated = (updated) => {
+    const upd = list => list.map(c => c.id === updated.id ? updated : c);
+    setClients(upd);
+    setFilteredClients(upd);
+  };
+
+  // FAB: principal expande opciones, menu abre sidebar, arrow-left vuelve
+  const fabActions = [
+    { icon: 'more-vertical', onPress: () => {}                        },
+    { icon: 'menu',          onPress: () => setMenuVisible(true)      },
+    { icon: 'arrow-left',    onPress: onBack                          },
+  ];
 
   return (
     <SafeAreaProvider style={styles.safeArea}>
       <View style={styles.container}>
-        <TouchableOpacity style={[styles.backButton, {backgroundColor: getStatusColor()}]} onPress={onBack} activeOpacity={0.8}>
-          <Feather name="arrow-left" size={24} color="#fff" />
-        </TouchableOpacity>
+        <ToastContainer />
+
+        <SlideMenu
+          visible={menuVisible}
+          onClose={() => setMenuVisible(false)}
+          userData={userData}
+          username={username}
+          onLogout={onLogout}
+        />
+
+        <ExpandableFAB actions={fabActions} />
 
         <ScrollView
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
           refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={handleRefresh}
-              tintColor="#64c27b"
-              colors={['#64c27b']}
-            />
+            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh}
+              tintColor="#64c27b" colors={['#64c27b']} />
           }
         >
           <Card style={styles.mainCard}>
-            <DashboardHeader
-              userName={username || 'Usuario'}
-              isOnline={isOnline}
-              actionStatus={actionStatus}
-            />
+            {/* Header usa SyncContext internamente */}
+            <DashboardHeader userName={username || 'Usuario'} isOnline={isOnline} />
 
             <View style={styles.content}>
               {/* Buscador */}
@@ -191,25 +146,26 @@ export default function ClientsScreen({ userData, username, onBack }) {
 
               {/* Contador */}
               <Text style={styles.counter}>
-                {filteredClients.length} {filteredClients.length === 1 ? 'cliente' : 'clientes'}
-                {searchQuery && ` encontrado${filteredClients.length === 1 ? '' : 's'}`}
+                {loading
+                  ? 'Cargando...'
+                  : `${filteredClients.length} ${filteredClients.length === 1 ? 'cliente' : 'clientes'}` +
+                    (searchQuery ? ` encontrado${filteredClients.length === 1 ? '' : 's'}` : '')
+                }
               </Text>
 
-              {/* Lista de clientes */}
-              {filteredClients.length === 0 ? (
+              {/* Lista */}
+              {filteredClients.length === 0 && !loading ? (
                 <View style={styles.emptyState}>
                   <Feather name="users" size={48} color="#D1D5DB" />
                   <Text style={styles.emptyText}>
                     {searchQuery ? 'No se encontraron clientes' : 'No hay clientes'}
                   </Text>
                   {!isOnline && !searchQuery && (
-                    <Text style={styles.emptySubtext}>
-                      Conéctate para sincronizar
-                    </Text>
+                    <Text style={styles.emptySubtext}>Conéctate para sincronizar</Text>
                   )}
                 </View>
               ) : (
-                filteredClients.map((client) => (
+                filteredClients.map(client => (
                   <ClientCard
                     key={client.id}
                     client={client}
@@ -224,7 +180,7 @@ export default function ClientsScreen({ userData, username, onBack }) {
         <ClientDetailModal
           visible={!!selectedClient}
           client={selectedClient}
-          onClose={() => setSelectedClient(null)}
+          onClose={handleCloseClientModal}
           onClientUpdated={handleClientUpdated}
         />
       </View>
@@ -233,80 +189,21 @@ export default function ClientsScreen({ userData, username, onBack }) {
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#f5f0ebff',
-  },
-  container: {
-    flex: 1,
-  },
-  backButton: {
-    position: 'absolute',
-    bottom: 60,
-    left: 16,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#64c27b',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 999,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-    paddingTop: 80,
-  },
-  mainCard: {
-    marginBottom: 16,
-  },
-  content: {
-    padding: 16,
-  },
+  safeArea:  { flex: 1, backgroundColor: '#f5f0ebff' },
+  container: { flex: 1 },
+  scrollView:    { flex: 1 },
+  scrollContent: { padding: 16, paddingTop: 80 },
+  mainCard:      { marginBottom: 16 },
+  content:       { padding: 16 },
   searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f3f4f6',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 16,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#f3f4f6', borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 10, marginBottom: 16,
   },
-  searchIcon: {
-    marginRight: 8,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    color: '#0B1B2A',
-  },
-  counter: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#6B7280',
-    marginBottom: 12,
-  },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 60,
-  },
-  emptyText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#9CA3AF',
-    marginTop: 16,
-  },
-  emptySubtext: {
-    fontSize: 13,
-    color: '#D1D5DB',
-    marginTop: 8,
-  },
+  searchIcon:   { marginRight: 8 },
+  searchInput:  { flex: 1, fontSize: 15, color: '#0B1B2A' },
+  counter:      { fontSize: 13, fontWeight: '600', color: '#6B7280', marginBottom: 12 },
+  emptyState:   { alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
+  emptyText:    { fontSize: 16, fontWeight: '600', color: '#9CA3AF', marginTop: 16 },
+  emptySubtext: { fontSize: 13, color: '#D1D5DB', marginTop: 8 },
 });

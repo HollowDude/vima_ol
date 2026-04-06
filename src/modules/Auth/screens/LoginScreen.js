@@ -120,7 +120,7 @@ export default function LoginScreen({ onLoginSuccess }) {
           </Card>
 
           <Text style={styles.footer}>
-            Versión 1.0.0 • VIMA © 2025
+            Versión 1.2.0 • VIMA © 2026
           </Text>
         </KeyboardAwareScrollView>
       </KeyboardAvoidingView>

@@ -4,37 +4,44 @@ import LoginScreen from '../../modules/Auth/screens/LoginScreen';
 import HomeScreen from '../../modules/Home/screens/HomeScreen';
 import TasksScreen from '../../modules/Tasks/screens/TasksScreen';
 import ClientsScreen from '../../modules/Clients/screens/ClientsScreen';
-import LeadsScreen from '../../modules/Leads/screens/LeadsScreen'; 
+import LeadsScreen from '../../modules/Leads/screens/LeadsScreen';
 import StorageService from '../storage/storage.service';
 import OdooService from '../api/odoo.service';
-import syncService from '../sync/sync.service';
-
+import SyncService from '../sync/sync.service';
+import { SyncProvider } from '../context/SyncContext';
 
 export default function AppNavigator() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [userData, setUserData] = useState(null);
-  const [currentScreen, setCurrentScreen] = useState('home');
-  const [username, setUsername] = useState();
+  const [isLoading, setIsLoading]             = useState(true);
+  const [userData, setUserData]               = useState(null);
+  const [currentScreen, setCurrentScreen]     = useState('home');
+  const [username, setUsername]               = useState('');
 
   useEffect(() => {
     checkAuth();
-    const handleUser = async () =>{
-        const user = await syncService.getCurrentUser()
-        setUsername(user[0].partner_id[1])
+  }, []);
+
+  useEffect(() => {
+    if (!userData) return;
+    const handleUser = async () => {
+      try {
+        const user = await SyncService.getCurrentUser();
+        if (user?.[0]?.partner_id?.[1]) {
+          setUsername(user[0].partner_id[1]);
+        }
+      } catch (e) {
+        console.error('[AppNavigator] Error obteniendo usuario:', e);
       }
-  
-      handleUser();
+    };
+    handleUser();
   }, [userData]);
 
   const checkAuth = async () => {
     try {
       const authData = await StorageService.getAuthData();
-      
-      if (authData && authData.uid && authData.password) {
-        OdooService.uid = authData.uid;
+      if (authData?.uid && authData?.password) {
+        OdooService.uid      = authData.uid;
         OdooService.password = authData.password;
-        
         setUserData(authData);
         setIsAuthenticated(true);
       }
@@ -64,50 +71,47 @@ export default function AppNavigator() {
     );
   }
 
-  if (isAuthenticated) {
-    if (currentScreen === 'tasks') {
-      return (
-        <TasksScreen
-          userData={userData}
-          username={username}
-          onBack={() => setCurrentScreen('home')}
-        />
-      );
-    }
-
-    if (currentScreen === 'clients') {
-      return (
-        <ClientsScreen
-          userData={userData}
-          username={username}
-          onBack={() => setCurrentScreen('home')}
-        />
-      );
-    }
-
-    if (currentScreen === 'leads') {
-      return (
-        <LeadsScreen
-          userData={userData}
-          username={username}
-          onBack={() => setCurrentScreen('home')}
-        />
-      );
-    }
-    
-    return (
-      <HomeScreen
-        userData={userData}
-        username={username}
-        onLogout={handleLogout}
-        onNavigateToTasks={() => setCurrentScreen('tasks')}
-        onNavigateToClients={() => setCurrentScreen('clients')}
-        onNavigateToLeads={() => setCurrentScreen('leads')} 
-      />
-    );
+  if (!isAuthenticated) {
+    return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
   }
 
-  return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
+  // Props comunes a todas las pantallas autenticadas
+  const sharedProps = {
+    userData,
+    username,
+    onLogout: handleLogout,
+  };
+
+  return (
+    <SyncProvider>
+      {currentScreen === 'tasks' && (
+        <TasksScreen
+          {...sharedProps}
+          onBack={() => setCurrentScreen('home')}
+        />
+      )}
+      {currentScreen === 'clients' && (
+        <ClientsScreen
+          {...sharedProps}
+          onBack={() => setCurrentScreen('home')}
+        />
+      )}
+      {currentScreen === 'leads' && (
+        <LeadsScreen
+          {...sharedProps}
+          onBack={() => setCurrentScreen('home')}
+        />
+      )}
+      {currentScreen === 'home' && (
+        <HomeScreen
+          {...sharedProps}
+          onNavigateToTasks={()   => setCurrentScreen('tasks')}
+          onNavigateToClients={() => setCurrentScreen('clients')}
+          onNavigateToLeads={()   => setCurrentScreen('leads')}
+        />
+      )}
+    </SyncProvider>
+  );
 }
 
 const styles = StyleSheet.create({
