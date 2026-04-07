@@ -66,6 +66,11 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
   const [loadingAttachments, setLoadingAttachments] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
+  // ── Estado para edición de descripción ────────────────────────────────────
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState('');
+  const [savingDescription, setSavingDescription] = useState(false);
+
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -101,6 +106,8 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
     if (visible && task) {
       setReprogramming(false);
       setReason('');
+      setEditingDescription(false);
+      setDescriptionDraft(stripHtml(task.description || ''));
       loadTags();
       loadSurveys();
       
@@ -134,7 +141,6 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
       const lead = await SyncService.getLeadByTaskId(task.id);
       setAssociatedLead(lead);
     } catch (error) {
-      console.error('Error cargando lead asociada:', error);
       setAssociatedLead(null);
     }
   };
@@ -146,7 +152,6 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
       const attachments = await SyncService.getTaskAttachments(task.id);
       setAttachmentsCount(attachments.length);
     } catch (error) {
-      console.error('Error cargando adjuntos:', error);
       setAttachmentsCount(0);
     } finally {
       setLoadingAttachments(false);
@@ -189,11 +194,7 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
         if (s.survey_user_input_id) isCompleted = true;
         if (localProgress && localProgress.state === 'done') isCompleted = true;
 
-        return {
-          ...s,
-          isCompleted,
-          localProgress,
-        };
+        return { ...s, isCompleted, localProgress };
       }));
 
       setTaskSurveys(enrichedSurveys);
@@ -225,7 +226,6 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
       
       setIsUserOwnTask(taskPartnerId === currentUserPartnerId);
     } catch (error) {
-      console.error('Error verificando propietario:', error);
       setIsUserOwnTask(false);
     }
   };
@@ -243,6 +243,56 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
   const completedSurveys = taskSurveys.filter(s => s.isCompleted).length;
   const hasSurveys = totalSurveys > 0;
   const allSurveysDone = hasSurveys && totalSurveys === completedSurveys;
+
+  const cleanDescription = stripHtml(task.description);
+  const taskHasDescription = cleanDescription.trim().length > 0;
+
+  // ── Edición de descripción ────────────────────────────────────────────────
+
+  const handleStartEditDescription = () => {
+    setDescriptionDraft(cleanDescription);
+    setEditingDescription(true);
+  };
+
+  const handleCancelEditDescription = () => {
+    setDescriptionDraft(cleanDescription);
+    setEditingDescription(false);
+  };
+
+  const handleSaveDescription = async () => {
+    if (!descriptionDraft.trim()) {
+      Alert.alert(
+        "Descripción vacía",
+        "Debes escribir algo en la descripción. Es obligatoria para poder completar la tarea en Odoo.",
+        [{ text: "Entendido" }]
+      );
+      return;
+    }
+
+    try {
+      setSavingDescription(true);
+      await SyncService.updateTaskLocally(task.id, { description: descriptionDraft.trim() });
+
+      if (isOnline) {
+        try {
+          await SyncService.syncPendingChanges();
+        } catch (_) {
+          // guardado local, se sincronizará después
+        }
+      }
+
+      // Actualizar la vista inmediatamente mutando el objeto task local
+      task.description = descriptionDraft.trim();
+      setEditingDescription(false);
+      if (onTaskUpdated) onTaskUpdated();
+    } catch (e) {
+      Alert.alert("Error", "No se pudo guardar la descripción");
+    } finally {
+      setSavingDescription(false);
+    }
+  };
+
+  // ── Completar tarea con guardia de descripción ─────────────────────────────
 
   const handleOpenSurvey = (survey) => {
     setSelectedSurvey({ 
@@ -265,7 +315,6 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
             'La tarea se ha marcado como finalizada y sincronizado con el servidor.'
           );
         } catch (syncError) {
-          console.warn('⚠️ Error sincronizando (cambio guardado localmente):', syncError);
           Alert.alert(
             '✓ Tarea completada (offline)', 
             'La tarea se ha marcado como finalizada.\n\nSe sincronizará cuando recuperes la conexión.'
@@ -283,9 +332,27 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
       if (onTaskUpdated) onTaskUpdated();
       closeModal();
     } catch (error) {
-      console.error('Error completando tarea:', error);
       Alert.alert('Error', 'No se pudo completar la tarea.');
     }
+  };
+
+  /**
+   * Muestra el alert para añadir descripción antes de completar.
+   * Si el usuario acepta, abre el editor de descripción.
+   */
+  const promptAddDescriptionThenComplete = () => {
+    Alert.alert(
+      "Descripción requerida",
+      "Odoo no permite completar tareas sin descripción.\n\n¿Quieres añadir una ahora para poder completarla?",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Añadir descripción",
+          style: "default",
+          onPress: handleStartEditDescription,
+        },
+      ]
+    );
   };
 
   const handleTaskAction = () => {
@@ -293,6 +360,7 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
       Alert.alert('Información', 'Esta tarea ya ha sido completada.');
       return;
     }
+
     if (hasSurveys && !allSurveysDone) {
       Alert.alert(
         "Encuestas pendientes",
@@ -301,6 +369,13 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
       );
       return;
     }
+
+    // Guardia de descripción — se comprueba ANTES de confirmar el completado
+    if (!taskHasDescription) {
+      promptAddDescriptionThenComplete();
+      return;
+    }
+
     if (isUserOwnTask) {
       showStateChangeOptions();
       return;
@@ -313,11 +388,7 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
         : '¿Deseas marcar esta tarea como finalizada?',
       [
         { text: 'Cancelar', style: 'cancel' },
-        { 
-          text: 'Completar', 
-          style: 'default',
-          onPress: handleCompleteTask 
-        }
+        { text: 'Completar', style: 'default', onPress: handleCompleteTask }
       ]
     );
   };
@@ -341,9 +412,7 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
   };
 
   const getTagNames = () => {
-    if (!Array.isArray(task.management_tags) || task.management_tags.length === 0) {
-        return [];
-    }
+    if (!Array.isArray(task.management_tags) || task.management_tags.length === 0) return [];
     return managementTags.filter(tag => task.management_tags.includes(tag.id));
   };
 
@@ -359,15 +428,11 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
     const { minDate, maxDate } = getReprogrammingRange();
     
     const selectedTime = newDate.getTime();
-    const minTime = minDate.getTime();
-    const maxTime = maxDate.getTime();
-
-    if (selectedTime < minTime) {
+    if (selectedTime < minDate.getTime()) {
       Alert.alert("Fecha inválida", `No puedes reprogramar antes del ${minDate.toLocaleDateString('es-ES')}.`);
       return;
     }
-
-    if (selectedTime > maxTime) {
+    if (selectedTime > maxDate.getTime()) {
       Alert.alert("Fecha inválida", `No puedes reprogramar después del ${maxDate.toLocaleDateString('es-ES')}.`);
       return;
     }
@@ -376,37 +441,31 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
     
     try {
       await SyncService.updateTaskLocally(task.id, { date_deadline: utcDateStr });
-      
-      await SyncService.createReasonWizard(
-        'reason.wizard',
-        {
-          task_id: task.id,
-          new_date: utcDateStr,
-          old_date: task.date_deadline,
-          reason: reason
-        }
-      );
+      await SyncService.createReasonWizard('reason.wizard', {
+        task_id: task.id,
+        new_date: utcDateStr,
+        old_date: task.date_deadline,
+        reason: reason
+      });
 
       if (isOnline) {
         setSyncing(true);
         try {
           await SyncService.syncPendingChanges();
           Alert.alert("✓ Reprogramada", "La tarea se ha actualizado y sincronizado con el servidor.");
-        } catch (syncError) {
-          console.warn('⚠️ Error sincronizando:', syncError);
-          Alert.alert("✓ Reprogramada (offline)", "La tarea se actualizará en el servidor cuando recuperes la conexión.");
+        } catch (_) {
+          Alert.alert("✓ Reprogramada (offline)", "La tarea se actualizará cuando recuperes la conexión.");
         } finally {
           setSyncing(false);
         }
       } else {
-        Alert.alert("✓ Reprogramada (offline)", "La tarea se actualizará en el servidor cuando recuperes la conexión.");
+        Alert.alert("✓ Reprogramada (offline)", "La tarea se actualizará cuando recuperes la conexión.");
       }
       
       setReprogramming(false);
       setReason('');
       if (onTaskUpdated) onTaskUpdated();
     } catch (e) {
-      console.error(e);
       Alert.alert("Error", "No se pudo reprogramar");
     }
   };
@@ -423,7 +482,14 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
     const currentState = task.state;
     const options = stateOptions.map(opt => ({
       text: `${opt.name}${opt.id === currentState ? ' (Actual)' : ''}`,
-      onPress: () => handleStateChange(opt.id),
+      onPress: () => {
+        // Si quieren pasar a "done" y no hay descripción, bloqueamos
+        if (opt.id === '1_done' && !taskHasDescription) {
+          promptAddDescriptionThenComplete();
+          return;
+        }
+        handleStateChange(opt.id);
+      },
       style: opt.id === currentState ? 'cancel' : 'default'
     }));
     options.push({ text: 'Cancelar', style: 'cancel' });
@@ -432,7 +498,6 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
 
   const handleStateChange = async (newState) => {
     if (newState === task.state) return;
-    
     try {
       await SyncService.updateTaskLocally(task.id, { state: newState });
       
@@ -441,8 +506,7 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
         try {
           await SyncService.syncPendingChanges();
           Alert.alert('✓ Estado actualizado', 'El cambio se ha sincronizado con el servidor.');
-        } catch (syncError) {
-          console.warn('⚠️ Error sincronizando:', syncError);
+        } catch (_) {
           Alert.alert('✓ Estado actualizado (offline)', 'El cambio se sincronizará cuando recuperes la conexión.');
         } finally {
           setSyncing(false);
@@ -453,7 +517,6 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
       
       if (onTaskUpdated) onTaskUpdated();
     } catch (error) {
-      console.error('Error actualizando estado:', error);
       Alert.alert('Error', 'No se pudo actualizar el estado de la tarea.');
     }
   };
@@ -463,21 +526,16 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
     await loadSurveys();
   };
 
-  const statusInfo = getStatusInfo();
+  const statusInfo   = getStatusInfo();
   const priorityInfo = getPriorityInfo();
-  const taskTags = getTagNames();
-  const cleanDescription = stripHtml(task.description);
+  const taskTags     = getTagNames();
 
   const { minDate, maxDate } = getReprogrammingRange();
 
   const displayDeadline = task.date_deadline 
     ? parseOdooDate(task.date_deadline).toLocaleString('es-ES', {
-        weekday: 'long',
-        day: '2-digit',
-        month: 'long',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
+        weekday: 'long', day: '2-digit', month: 'long', year: 'numeric',
+        hour: '2-digit', minute: '2-digit'
       }) 
     : 'Sin asignar';
 
@@ -495,6 +553,9 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
       </View>
     );
   };
+
+  // Botón de completar: texto y estilo según estado de descripción
+  const completeButtonBlocked = !taskHasDescription && task.state !== '1_done';
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={closeModal}>
@@ -588,6 +649,29 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
               </View>
             )}
 
+            {/* ── Aviso si falta descripción ── */}
+            {!taskHasDescription && task.state !== '1_done' && (
+              <TouchableOpacity
+                style={styles.missingDescriptionBanner}
+                onPress={handleStartEditDescription}
+                activeOpacity={0.8}
+              >
+                <View style={styles.missingDescriptionLeft}>
+                  <Feather name="alert-triangle" size={16} color="#B45309" />
+                  <View style={styles.missingDescriptionTextBlock}>
+                    <Text style={styles.missingDescriptionTitle}>Descripción requerida</Text>
+                    <Text style={styles.missingDescriptionSubtitle}>
+                      Odoo no permitirá completar esta tarea hasta que tenga descripción.
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.missingDescriptionAction}>
+                  <Feather name="edit-3" size={14} color="#92400E" />
+                  <Text style={styles.missingDescriptionActionText}>Añadir</Text>
+                </View>
+              </TouchableOpacity>
+            )}
+
             {loadingSurveys ? (
               <ActivityIndicator style={{ marginVertical: 20 }} size="small" color="#64c27b" />
             ) : hasSurveys && (
@@ -628,17 +712,13 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
                           color={survey.isCompleted ? "#10B981" : "#F59E0B"} 
                         />
                         {survey.isCompleted && (
-                            <View style={styles.editBadge}>
-                                <Feather name="edit-2" size={10} color="#15803d" />
-                                <Text style={styles.editBadgeText}>Editar</Text>
-                            </View>
+                          <View style={styles.editBadge}>
+                            <Feather name="edit-2" size={10} color="#15803d" />
+                            <Text style={styles.editBadgeText}>Editar</Text>
+                          </View>
                         )}
                       </View>
-                      
-                      <Text style={styles.surveyTitle} numberOfLines={2}>
-                        {survey.title}
-                      </Text>
-                      
+                      <Text style={styles.surveyTitle} numberOfLines={2}>{survey.title}</Text>
                       <Text style={styles.surveyStatusText}>
                         {survey.isCompleted ? "Completada" : "Pendiente"}
                       </Text>
@@ -688,70 +768,67 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
                 </View>
                 
                 <TouchableOpacity 
-                    style={styles.datePickerButton} 
-                    onPress={() => setShowPicker(true)}
-                  >
-                    <View style={styles.datePickerLeft}>
-                      <Feather name="calendar" size={20} color="#64c27b" />
-                      <View style={styles.datePickerTextContainer}>
-                        <Text style={styles.datePickerDate}>
-                          {newDate.toLocaleDateString('es-ES', { 
-                            weekday: 'long',
-                            day: '2-digit', 
-                            month: 'long',
-                            year: 'numeric'
-                          })}
-                        </Text>
-                        <Text style={styles.datePickerTime}>
-                          {newDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
-                        </Text>
-                      </View>
+                  style={styles.datePickerButton} 
+                  onPress={() => setShowPicker(true)}
+                >
+                  <View style={styles.datePickerLeft}>
+                    <Feather name="calendar" size={20} color="#64c27b" />
+                    <View style={styles.datePickerTextContainer}>
+                      <Text style={styles.datePickerDate}>
+                        {newDate.toLocaleDateString('es-ES', { 
+                          weekday: 'long', day: '2-digit', month: 'long', year: 'numeric'
+                        })}
+                      </Text>
+                      <Text style={styles.datePickerTime}>
+                        {newDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
+                      </Text>
                     </View>
-                    <Feather name="chevron-down" size={20} color="#9CA3AF" />
-                  </TouchableOpacity>
+                  </View>
+                  <Feather name="chevron-down" size={20} color="#9CA3AF" />
+                </TouchableOpacity>
 
-                  <SimpleDateTimePicker 
-                    visible={showPicker}
-                    onClose={() => setShowPicker(false)}
-                    selectedDate={newDate}
-                    onConfirm={setNewDate}
-                    minDate={minDate}
-                    maxDate={maxDate}
-                    mode="datetime"
-                  />
+                <SimpleDateTimePicker 
+                  visible={showPicker}
+                  onClose={() => setShowPicker(false)}
+                  selectedDate={newDate}
+                  onConfirm={setNewDate}
+                  minDate={minDate}
+                  maxDate={maxDate}
+                  mode="datetime"
+                />
                   
-                  <View style={styles.reasonField}>
-                    <Text style={styles.reasonLabel}>
-                      Razón de la reprogramación <Text style={styles.required}>*</Text>
-                    </Text>
-                    <TextInput
-                      style={styles.reasonInput}
-                      value={reason}
-                      onChangeText={setReason}
-                      placeholder="Explica por qué reprogramas esta tarea..."
-                      placeholderTextColor="#9CA3AF"
-                      multiline
-                      numberOfLines={3}
-                      textAlignVertical="top"
-                      maxLength={500}
-                    />
-                  </View>
+                <View style={styles.reasonField}>
+                  <Text style={styles.reasonLabel}>
+                    Razón de la reprogramación <Text style={styles.required}>*</Text>
+                  </Text>
+                  <TextInput
+                    style={styles.reasonInput}
+                    value={reason}
+                    onChangeText={setReason}
+                    placeholder="Explica por qué reprogramas esta tarea..."
+                    placeholderTextColor="#9CA3AF"
+                    multiline
+                    numberOfLines={3}
+                    textAlignVertical="top"
+                    maxLength={500}
+                  />
+                </View>
 
-                  <View style={styles.reprogramActions}>
-                    <TouchableOpacity 
-                      style={[styles.actionButton, styles.actionButtonCancel]} 
-                      onPress={() => setReprogramming(false)}
-                    >
-                      <Text style={styles.actionButtonCancelText}>Cancelar</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity 
-                      style={[styles.actionButton, styles.actionButtonConfirm]} 
-                      onPress={handleReprogram}
-                    >
-                      <Feather name="check" size={16} color="#fff" />
-                      <Text style={styles.actionButtonConfirmText}>Confirmar</Text>
-                    </TouchableOpacity>
-                  </View>
+                <View style={styles.reprogramActions}>
+                  <TouchableOpacity 
+                    style={[styles.actionButton, styles.actionButtonCancel]} 
+                    onPress={() => setReprogramming(false)}
+                  >
+                    <Text style={styles.actionButtonCancelText}>Cancelar</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={[styles.actionButton, styles.actionButtonConfirm]} 
+                    onPress={handleReprogram}
+                  >
+                    <Feather name="check" size={16} color="#fff" />
+                    <Text style={styles.actionButtonConfirmText}>Confirmar</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             ) : (
               <>
@@ -760,55 +837,152 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
                   label="Fecha de Ejecución" 
                   value={displayDeadline} 
                 />
-                
                 <InfoRow 
-                    icon="flag" 
-                    label="Fin del Periodo"
-                    value={maxDate.toLocaleDateString('es-ES', {
-                      day: '2-digit',
-                      month: 'long',
-                      year: 'numeric'
-                    })}
-                    colorOverride="#F59E0B"
-                  />
+                  icon="flag" 
+                  label="Fin del Periodo"
+                  value={maxDate.toLocaleDateString('es-ES', {
+                    day: '2-digit', month: 'long', year: 'numeric'
+                  })}
+                  colorOverride="#F59E0B"
+                />
               </>
             )}
 
-            {cleanDescription && (
-              <>
-                <View style={styles.divider} />
+            {/* ── Sección Descripción (siempre visible, editable) ─────────── */}
+            <View style={styles.divider} />
+            <View style={styles.sectionHeader}>
+              <View style={styles.descriptionTitleRow}>
                 <Text style={styles.sectionTitle}>Descripción</Text>
-                <View style={styles.descriptionBox}>
-                  <Text style={styles.descriptionText}>{cleanDescription}</Text>
+                {!taskHasDescription && (
+                  <View style={styles.descriptionMissingBadge}>
+                    <Feather name="alert-circle" size={11} color="#EF4444" />
+                    <Text style={styles.descriptionMissingBadgeText}>Falta</Text>
+                  </View>
+                )}
+              </View>
+
+              {task.state !== '1_done' && !editingDescription && (
+                <TouchableOpacity
+                  style={styles.editDescriptionButton}
+                  onPress={handleStartEditDescription}
+                >
+                  <Feather name="edit-3" size={15} color="#64c27b" />
+                  <Text style={styles.editDescriptionButtonText}>
+                    {taskHasDescription ? 'Editar' : 'Añadir'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {editingDescription ? (
+              // ── Editor de descripción ──────────────────────────────────────
+              <View style={styles.descriptionEditorContainer}>
+                <TextInput
+                  style={styles.descriptionEditor}
+                  value={descriptionDraft}
+                  onChangeText={setDescriptionDraft}
+                  placeholder="Describe el objetivo de esta tarea, qué debe hacerse..."
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                  numberOfLines={6}
+                  textAlignVertical="top"
+                  autoFocus
+                  maxLength={2000}
+                />
+                <View style={styles.descriptionEditorFooter}>
+                  <Text style={styles.descriptionCharCount}>
+                    {descriptionDraft.length}/2000
+                  </Text>
+                  <View style={styles.descriptionEditorActions}>
+                    <TouchableOpacity
+                      style={[styles.descEditorBtn, styles.descEditorBtnCancel]}
+                      onPress={handleCancelEditDescription}
+                      disabled={savingDescription}
+                    >
+                      <Text style={styles.descEditorBtnCancelText}>Cancelar</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.descEditorBtn,
+                        styles.descEditorBtnSave,
+                        !descriptionDraft.trim() && styles.descEditorBtnDisabled,
+                      ]}
+                      onPress={handleSaveDescription}
+                      disabled={savingDescription || !descriptionDraft.trim()}
+                    >
+                      {savingDescription ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <>
+                          <Feather name="check" size={15} color="#fff" />
+                          <Text style={styles.descEditorBtnSaveText}>Guardar</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  </View>
                 </View>
-              </>
+
+                {!descriptionDraft.trim() && (
+                  <View style={styles.descriptionEditorWarning}>
+                    <Feather name="info" size={13} color="#B45309" />
+                    <Text style={styles.descriptionEditorWarningText}>
+                      La descripción es obligatoria para poder completar la tarea en Odoo.
+                    </Text>
+                  </View>
+                )}
+              </View>
+            ) : taskHasDescription ? (
+              // ── Descripción en modo lectura ────────────────────────────────
+              <View style={styles.descriptionBox}>
+                <Text style={styles.descriptionText}>{cleanDescription}</Text>
+              </View>
+            ) : (
+              // ── Sin descripción ────────────────────────────────────────────
+              <TouchableOpacity
+                style={styles.descriptionEmptyBox}
+                onPress={handleStartEditDescription}
+                activeOpacity={0.7}
+              >
+                <Feather name="file-text" size={20} color="#D1D5DB" />
+                <Text style={styles.descriptionEmptyText}>Sin descripción</Text>
+                <Text style={styles.descriptionEmptySubtext}>
+                  Toca para añadirla (necesaria para completar la tarea)
+                </Text>
+              </TouchableOpacity>
             )}
 
             {task.state !== '1_done' && (
               <>
                 <View style={styles.divider} />
+
+                {/* Botón principal de completar — con indicador si falta descripción */}
                 <TouchableOpacity 
                   style={[
                     styles.completeTaskButton,
-                    ((hasSurveys && allSurveysDone) || (!hasSurveys && !isUserOwnTask)) && styles.completeTaskButtonReady,
-                    (hasSurveys && !allSurveysDone) && styles.completeTaskButtonWarning,
-                    (!hasSurveys && isUserOwnTask) && styles.completeTaskButtonOwn,
+                    completeButtonBlocked             && styles.completeTaskButtonBlocked,
+                    !completeButtonBlocked && (hasSurveys && allSurveysDone) && styles.completeTaskButtonReady,
+                    !completeButtonBlocked && !hasSurveys && !isUserOwnTask  && styles.completeTaskButtonReady,
+                    !completeButtonBlocked && (hasSurveys && !allSurveysDone)  && styles.completeTaskButtonWarning,
+                    !completeButtonBlocked && !hasSurveys && isUserOwnTask   && styles.completeTaskButtonOwn,
                   ]}
                   onPress={handleTaskAction}
                 >
                   <Feather 
                     name={
-                      hasSurveys && !allSurveysDone ? "alert-circle" :
-                      (!hasSurveys && isUserOwnTask) ? "edit" :
-                      "check-circle"
+                      completeButtonBlocked           ? 'alert-circle' :
+                      hasSurveys && !allSurveysDone   ? 'alert-circle' :
+                      !hasSurveys && isUserOwnTask    ? 'edit' :
+                      'check-circle'
                     } 
                     size={20} 
                     color="#fff" 
                   />
                   <Text style={styles.completeTaskButtonText}>
-                    {hasSurveys && !allSurveysDone 
+                    {completeButtonBlocked
+                      ? 'Añadir descripción para completar'
+                      : hasSurveys && !allSurveysDone 
                       ? `Pendientes: ${totalSurveys - completedSurveys} encuestas` 
-                      : (!hasSurveys && isUserOwnTask)
+                      : !hasSurveys && isUserOwnTask
                       ? 'Cambiar Estado'
                       : 'Completar Tarea'}
                   </Text>
@@ -837,378 +1011,355 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
 
 const styles = StyleSheet.create({
   attachmentsBadge: {
-    position: 'absolute',
-    top: -4,
-    right: -4,
-    backgroundColor: '#EF4444',
-    borderRadius: 10,
-    minWidth: 20,
-    height: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-    borderWidth: 2,
-    borderColor: '#fff',
+    position: 'absolute', top: -4, right: -4,
+    backgroundColor: '#EF4444', borderRadius: 10,
+    minWidth: 20, height: 20,
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 4, borderWidth: 2, borderColor: '#fff',
   },
-  attachmentsBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#fff',
-  },
+  attachmentsBadgeText: { fontSize: 11, fontWeight: '700', color: '#fff' },
 
   leadTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#EFF6FF',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: '#EFF6FF', paddingVertical: 10, paddingHorizontal: 14,
+    borderRadius: 10, marginBottom: 12, borderWidth: 1, borderColor: '#BFDBFE',
   },
-  leadTagLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    gap: 8,
-  },
-  leadTagText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#3B82F6',
-    flex: 1,
-  },
+  leadTagLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 8 },
+  leadTagText: { fontSize: 13, fontWeight: '600', color: '#3B82F6', flex: 1 },
+
   titleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 8,
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'flex-start', marginBottom: 8,
   },
   attachmentsIconButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#f0fdf4',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 12,
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: '#f0fdf4', alignItems: 'center', justifyContent: 'center', marginLeft: 12,
   },
+
   overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0, 0, 0, 0.4)' },
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   modalContainer: { 
-    height: MODAL_HEIGHT, 
-    backgroundColor: '#fff', 
-    borderTopLeftRadius: 24, 
-    borderTopRightRadius: 24, 
-    overflow: 'hidden',
-    shadowColor: "#000", 
-    shadowOffset: { width: 0, height: -2 }, 
-    shadowOpacity: 0.25, 
-    shadowRadius: 4, 
-    elevation: 5,
-    paddingBottom: 30,
+    height: MODAL_HEIGHT, backgroundColor: '#fff', 
+    borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden',
+    shadowColor: "#000", shadowOffset: { width: 0, height: -2 }, 
+    shadowOpacity: 0.25, shadowRadius: 4, elevation: 5, paddingBottom: 30,
   },
   dragHeader: { 
-    width: '100%', 
-    height: 40, 
-    alignItems: 'center', 
-    justifyContent: 'center', 
-    backgroundColor: '#fff', 
-    borderBottomWidth: 1, 
-    borderBottomColor: '#f3f4f6' 
+    width: '100%', height: 40, alignItems: 'center', justifyContent: 'center', 
+    backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f3f4f6' 
   },
   handle: { width: 48, height: 5, backgroundColor: '#E5E7EB', borderRadius: 3 },
   scrollContainer: { flex: 1 },
   scrollContent: { padding: 24, paddingBottom: 40 },
-  headerRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 16,
-  },
+
+  headerRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
   statusBadge: { 
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12, 
-    paddingVertical: 6, 
-    borderRadius: 12,
-    gap: 6,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, gap: 6,
   },
   statusText: { fontSize: 12, fontWeight: '700', color: '#fff' },
   priorityBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    backgroundColor: '#fff',
-    gap: 6,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12,
+    borderWidth: 1.5, backgroundColor: '#fff', gap: 6,
   },
-  priorityText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  title: { fontSize: 22, fontWeight: '700', color: '#111827', marginBottom: 8, lineHeight: 28 },
-  tagsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 16,
-  },
+  priorityText: { fontSize: 12, fontWeight: '700' },
+
+  title: { fontSize: 22, fontWeight: '700', color: '#111827', marginBottom: 8, lineHeight: 28, flex: 1 },
+
+  tagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
   tagChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f0fdf4',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    gap: 4,
-    borderWidth: 1,
-    borderColor: '#86efac',
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#f0fdf4', paddingVertical: 4, paddingHorizontal: 10,
+    borderRadius: 12, gap: 4, borderWidth: 1, borderColor: '#86efac',
   },
-  tagText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#15803d',
-  },
+  tagText: { fontSize: 12, fontWeight: '600', color: '#15803d' },
+
   divider: { height: 1, backgroundColor: '#F3F4F6', marginVertical: 20 },
   sectionHeader: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', marginBottom: 16,
+  },
+  sectionTitle: { 
+    fontSize: 12, fontWeight: '700', color: '#6B7280', 
+    textTransform: 'uppercase', letterSpacing: 0.5 
+  },
+
+  // ── Banner descripción faltante ──────────────────────────────────────────
+  missingDescriptionBanner: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    borderRadius: 10,
+    padding: 12,
     marginBottom: 16,
   },
-  sectionTitle: { fontSize: 12, fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.5 },
-  reprogramButton: {
+  missingDescriptionLeft: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    flex: 1,
+    gap: 10,
+  },
+  missingDescriptionTextBlock: { flex: 1 },
+  missingDescriptionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#92400E',
+    marginBottom: 2,
+  },
+  missingDescriptionSubtitle: {
+    fontSize: 12,
+    color: '#B45309',
+    lineHeight: 17,
+  },
+  missingDescriptionAction: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 10,
     paddingVertical: 6,
+    borderRadius: 8,
+    gap: 4,
+    marginLeft: 10,
+  },
+  missingDescriptionActionText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#92400E',
+  },
+
+  // ── Descripción ──────────────────────────────────────────────────────────
+  descriptionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  descriptionMissingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    gap: 3,
+  },
+  descriptionMissingBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#EF4444',
+  },
+  editDescriptionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     backgroundColor: '#f0fdf4',
     borderRadius: 6,
   },
-  reprogramButtonText: {
+  editDescriptionButtonText: {
     fontSize: 13,
     fontWeight: '600',
     color: '#64c27b',
   },
-  infoRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
-  iconContainer: { 
-    width: 40, 
-    height: 40, 
-    borderRadius: 20, 
-    backgroundColor: '#f0fdf4', 
-    alignItems: 'center', 
-    justifyContent: 'center', 
-    marginRight: 16 
+
+  descriptionBox: { 
+    backgroundColor: '#F9FAFB', padding: 16, borderRadius: 8, 
+    borderWidth: 1, borderColor: '#E5E7EB' 
   },
-  infoContent: { flex: 1 },
-  infoLabel: { fontSize: 11, color: '#9CA3AF', marginBottom: 2, fontWeight: '600', textTransform: 'uppercase' },
-  infoValue: { fontSize: 15, color: '#1F2937', fontWeight: '500', lineHeight: 20 },
-  descriptionBox: { backgroundColor: '#F9FAFB', padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB' },
   descriptionText: { fontSize: 14, color: '#374151', lineHeight: 20 },
-  reprogramContainer: {
+
+  descriptionEmptyBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#F9FAFB',
-    padding: 16,
-    borderRadius: 12,
+    padding: 24,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#E5E7EB',
-  },
-  reprogramTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 12,
-  },
-  rangeInfoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
+    borderStyle: 'dashed',
     gap: 6,
   },
-  rangeInfoText: {
-    fontSize: 12,
-    color: '#6B7280',
-    fontStyle: 'italic',
+  descriptionEmptyText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#9CA3AF',
   },
-  datePickerButton: {
+  descriptionEmptySubtext: {
+    fontSize: 12,
+    color: '#D1D5DB',
+    textAlign: 'center',
+  },
+
+  descriptionEditorContainer: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: '#64c27b',
+    overflow: 'hidden',
+  },
+  descriptionEditor: {
+    padding: 14,
+    fontSize: 14,
+    color: '#111827',
+    minHeight: 120,
+    textAlignVertical: 'top',
+    backgroundColor: '#fff',
+  },
+  descriptionEditorFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#fff',
-    padding: 14,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    marginBottom: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#F9FAFB',
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
   },
-  datePickerLeft: {
+  descriptionCharCount: {
+    fontSize: 11,
+    color: '#9CA3AF',
+  },
+  descriptionEditorActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  descEditorBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 6,
+    gap: 5,
   },
-  datePickerTextContainer: {
-    marginLeft: 12,
+  descEditorBtnCancel: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
   },
-  datePickerDate: {
-    fontSize: 15,
-    color: '#111827',
-    fontWeight: '500',
-    textTransform: 'capitalize',
-  },
-  datePickerTime: {
+  descEditorBtnCancelText: {
     fontSize: 13,
-    color: '#6B7280',
-    marginTop: 2,
-  },
-  reasonField: {
-    marginTop: 16,
-  },
-  reasonLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 8,
-  },
-  required: {
-    color: '#EF4444',
-  },
-  reasonInput: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 14,
-    color: '#111827',
-    height: 80,
-  },
-  reprogramActions: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 16,
-  },
-  actionButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    borderRadius: 8,
-    gap: 6,
-  },
-  actionButtonCancel: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-  },
-  actionButtonCancelText: {
-    fontSize: 14,
     fontWeight: '600',
     color: '#374151',
   },
-  actionButtonConfirm: {
+  descEditorBtnSave: {
     backgroundColor: '#64c27b',
   },
-  actionButtonConfirmText: {
-    fontSize: 14,
+  descEditorBtnDisabled: {
+    backgroundColor: '#D1D5DB',
+  },
+  descEditorBtnSaveText: {
+    fontSize: 13,
     fontWeight: '700',
     color: '#fff',
   },
-  completeTaskButton: {
+  descriptionEditorWarning: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#10B981',
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    gap: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 3,
+    alignItems: 'flex-start',
+    backgroundColor: '#FFFBEB',
+    padding: 10,
+    gap: 6,
   },
-  completeTaskButtonWarning: {
-    backgroundColor: '#F59E0B',
+  descriptionEditorWarningText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#B45309',
+    lineHeight: 17,
   },
-  completeTaskButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#fff',
+
+  reprogramButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 12, paddingVertical: 6,
+    backgroundColor: '#f0fdf4', borderRadius: 6,
   },
-  commentsSection: {
-    minHeight: 300,
-    maxHeight: 500,
+  reprogramButtonText: { fontSize: 13, fontWeight: '600', color: '#64c27b' },
+
+  infoRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  iconContainer: { 
+    width: 40, height: 40, borderRadius: 20, backgroundColor: '#f0fdf4', 
+    alignItems: 'center', justifyContent: 'center', marginRight: 16 
   },
-  surveysSection: {
-    marginTop: 10,
+  infoContent: { flex: 1 },
+  infoLabel: { 
+    fontSize: 11, color: '#9CA3AF', marginBottom: 2, 
+    fontWeight: '600', textTransform: 'uppercase' 
   },
-  counterBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+  infoValue: { fontSize: 15, color: '#1F2937', fontWeight: '500', lineHeight: 20 },
+
+  reprogramContainer: {
+    backgroundColor: '#F9FAFB', padding: 16, borderRadius: 12,
+    borderWidth: 1, borderColor: '#E5E7EB',
   },
+  reprogramTitle: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 12 },
+  rangeInfoContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 6 },
+  rangeInfoText: { fontSize: 12, color: '#6B7280', fontStyle: 'italic' },
+  datePickerButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: '#fff', padding: 14, borderRadius: 8,
+    borderWidth: 1, borderColor: '#D1D5DB', marginBottom: 16,
+  },
+  datePickerLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  datePickerTextContainer: { marginLeft: 12 },
+  datePickerDate: { fontSize: 15, color: '#111827', fontWeight: '500', textTransform: 'capitalize' },
+  datePickerTime: { fontSize: 13, color: '#6B7280', marginTop: 2 },
+  reasonField: { marginTop: 0 },
+  reasonLabel: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
+  required: { color: '#EF4444' },
+  reasonInput: {
+    backgroundColor: '#fff', borderWidth: 1, borderColor: '#D1D5DB',
+    borderRadius: 8, padding: 12, fontSize: 14, color: '#111827', height: 80,
+  },
+  reprogramActions: { flexDirection: 'row', gap: 12, marginTop: 16 },
+  actionButton: {
+    flex: 1, flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'center', padding: 12, borderRadius: 8, gap: 6,
+  },
+  actionButtonCancel: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#D1D5DB' },
+  actionButtonCancelText: { fontSize: 14, fontWeight: '600', color: '#374151' },
+  actionButtonConfirm: { backgroundColor: '#64c27b' },
+  actionButtonConfirmText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+
+  completeTaskButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#10B981', paddingVertical: 16, paddingHorizontal: 20,
+    borderRadius: 12, gap: 10,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15, shadowRadius: 4, elevation: 3,
+  },
+  completeTaskButtonBlocked: { backgroundColor: '#F59E0B' },
+  completeTaskButtonWarning: { backgroundColor: '#F59E0B' },
+  completeTaskButtonReady: { backgroundColor: '#10B981' },
+  completeTaskButtonOwn: { backgroundColor: '#3B82F6' },
+  completeTaskButtonText: { fontSize: 16, fontWeight: '700', color: '#fff' },
+
+  commentsSection: { minHeight: 300, maxHeight: 500 },
+
+  surveysSection: { marginTop: 10 },
+  counterBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
   counterBadgePending: { backgroundColor: '#FEF3C7' },
   counterBadgeDone: { backgroundColor: '#D1FAE5' },
   counterText: { fontSize: 11, fontWeight: '700' },
   counterTextPending: { color: '#B45309' },
   counterTextDone: { color: '#047857' },
-  surveyListContent: {
-    paddingRight: 20,
-  },
+  surveyListContent: { paddingRight: 20 },
   surveyCard: {
-    width: 140,
-    height: 110,
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    justifyContent: 'space-between',
-    backgroundColor: '#fff',
-    marginRight: 12,
+    width: 140, height: 110, borderRadius: 12, padding: 12,
+    borderWidth: 1, justifyContent: 'space-between',
+    backgroundColor: '#fff', marginRight: 12,
   },
-  surveyCardPending: {
-    borderColor: '#FCD34D',
-    backgroundColor: '#FFFBEB',
-  },
-  surveyCardDone: {
-    borderColor: '#6EE7B7',
-    backgroundColor: '#ECFDF5',
-  },
-  surveyCardTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  surveyTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#374151',
-    marginTop: 8,
-  },
-  surveyStatusText: {
-    fontSize: 10,
-    fontWeight: '500',
-    color: '#6B7280',
-    marginTop: 4,
-  },
+  surveyCardPending: { borderColor: '#FCD34D', backgroundColor: '#FFFBEB' },
+  surveyCardDone:    { borderColor: '#6EE7B7', backgroundColor: '#ECFDF5' },
+  surveyCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  surveyTitle:  { fontSize: 13, fontWeight: '600', color: '#374151', marginTop: 8 },
+  surveyStatusText: { fontSize: 10, fontWeight: '500', color: '#6B7280', marginTop: 4 },
   editBadge: {
-      flexDirection: 'row', 
-      alignItems: 'center', 
-      backgroundColor: '#fff', 
-      paddingHorizontal: 4, 
-      paddingVertical: 2, 
-      borderRadius: 4
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', 
+    paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4,
   },
   editBadgeText: { fontSize: 9, color: '#15803d', marginLeft: 2, fontWeight: 'bold' },
-  completeTaskButtonReady: {
-    backgroundColor: '#10B981',
-  },
-  completeTaskButtonOwn: {
-    backgroundColor: '#3B82F6',
-  },
 });

@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, Modal, TouchableOpacity, TextInput, 
-  Alert
+  Alert, Animated
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import SyncService from '../sync/sync.service';
@@ -15,6 +15,36 @@ const PRIORITY_OPTIONS = [
   { id: 'alta', name: 'Alta', color: '#EF4444', icon: 'alert-triangle' },
 ];
 
+// Pequeño componente de hint animado para el campo descripción
+function DescriptionHint({ visible }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(-8)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, {
+        toValue: visible ? 1 : 0,
+        duration: 250,
+        useNativeDriver: true,
+      }),
+      Animated.timing(translateY, {
+        toValue: visible ? 0 : -8,
+        duration: 250,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [visible]);
+
+  return (
+    <Animated.View style={[styles.descriptionHint, { opacity, transform: [{ translateY }] }]}>
+      <Feather name="info" size={13} color="#EF4444" />
+      <Text style={styles.descriptionHintText}>
+        La descripción es obligatoria. Odoo no permite completar tareas sin ella.
+      </Text>
+    </Animated.View>
+  );
+}
+
 export default function CreateTaskModal({ 
   visible, 
   userData, 
@@ -27,6 +57,7 @@ export default function CreateTaskModal({
 }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [descriptionTouched, setDescriptionTouched] = useState(false);
   
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -39,6 +70,9 @@ export default function CreateTaskModal({
   const [selectedClient, setSelectedClient] = useState(null);
   const [showClientModal, setShowClientModal] = useState(false);
 
+  // Shake animation para el campo descripción cuando se intenta guardar sin ella
+  const descriptionShake = useRef(new Animated.Value(0)).current;
+
   useEffect(() => {
     if (visible) {
       resetForm();
@@ -49,6 +83,7 @@ export default function CreateTaskModal({
   const resetForm = () => {
     setTitle('');
     setDescription('');
+    setDescriptionTouched(false);
     setSelectedDate(new Date());
     setSelectedPriority('media');
     setManagementTags([]);
@@ -79,6 +114,16 @@ export default function CreateTaskModal({
     }
   };
 
+  const shakeDescriptionField = () => {
+    Animated.sequence([
+      Animated.timing(descriptionShake, { toValue: 8,  duration: 60, useNativeDriver: true }),
+      Animated.timing(descriptionShake, { toValue: -8, duration: 60, useNativeDriver: true }),
+      Animated.timing(descriptionShake, { toValue: 6,  duration: 60, useNativeDriver: true }),
+      Animated.timing(descriptionShake, { toValue: -6, duration: 60, useNativeDriver: true }),
+      Animated.timing(descriptionShake, { toValue: 0,  duration: 60, useNativeDriver: true }),
+    ]).start();
+  };
+
   const toggleTag = (tagId) => {
     setManagementTags(prev => {
       if (prev === tagId) return null;
@@ -89,6 +134,18 @@ export default function CreateTaskModal({
   const handleSave = async () => {
     if (!title.trim()) {
       Alert.alert("Error", "Debes escribir un título");
+      return;
+    }
+
+    // Validación de descripción con feedback visual
+    if (!description.trim()) {
+      setDescriptionTouched(true);
+      shakeDescriptionField();
+      Alert.alert(
+        "Descripción requerida",
+        "La descripción es obligatoria.\n\nOdoo no permite completar tareas que no tengan descripción, así que debes añadirla ahora.",
+        [{ text: "Entendido", style: "default" }]
+      );
       return;
     }
 
@@ -155,7 +212,7 @@ export default function CreateTaskModal({
     const newTaskData = {
       name: title,
       display_name: title,
-      description: description || '',
+      description: description.trim(),
       project_id: finalProjectId,
       partner_id: finalPartnerId,
       user_ids: [[6, 0, [userIdValue]]],
@@ -174,6 +231,9 @@ export default function CreateTaskModal({
       Alert.alert("Error", "No se pudo guardar la tarea");
     }
   };
+
+  const descriptionIsEmpty = !description.trim();
+  const showDescriptionError = descriptionTouched && descriptionIsEmpty;
 
   const maxDate = projectFinishDate ? new Date(projectFinishDate) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
   const startOfToday = new Date();
@@ -359,19 +419,64 @@ export default function CreateTaskModal({
             </View>
           )}
 
+          {/* ── Campo descripción ─────────────────────────────────────────── */}
           <View style={styles.field}>
-            <Text style={styles.label}>Descripción (opcional)</Text>
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              value={description}
-              onChangeText={setDescription}
-              placeholder="Agrega detalles..."
-              placeholderTextColor="#9CA3AF"
-              multiline
-              numberOfLines={4}
-              textAlignVertical="top"
-              maxLength={1000}
-            />
+            <View style={styles.descriptionLabelRow}>
+              <Text style={styles.label}>
+                Descripción <Text style={styles.required}>*</Text>
+              </Text>
+              {/* Contador de caracteres / badge de estado */}
+              {description.trim().length > 0 ? (
+                <View style={styles.descriptionOkBadge}>
+                  <Feather name="check" size={11} color="#fff" />
+                  <Text style={styles.descriptionOkText}>OK</Text>
+                </View>
+              ) : (
+                <View style={styles.descriptionRequiredBadge}>
+                  <Feather name="alert-circle" size={11} color="#EF4444" />
+                  <Text style={styles.descriptionRequiredText}>Requerida</Text>
+                </View>
+              )}
+            </View>
+
+            <DescriptionHint visible={showDescriptionError} />
+
+            <Animated.View style={{ transform: [{ translateX: descriptionShake }] }}>
+              <TextInput
+                style={[
+                  styles.input,
+                  styles.textArea,
+                  showDescriptionError && styles.inputError,
+                  description.trim().length > 0 && styles.inputValid,
+                ]}
+                value={description}
+                onChangeText={(t) => {
+                  setDescription(t);
+                  if (t.trim().length > 0) setDescriptionTouched(false);
+                }}
+                onBlur={() => setDescriptionTouched(true)}
+                placeholder="Describe el objetivo de esta tarea, qué debe hacerse y cualquier detalle relevante..."
+                placeholderTextColor="#9CA3AF"
+                multiline
+                numberOfLines={5}
+                textAlignVertical="top"
+                maxLength={2000}
+              />
+            </Animated.View>
+
+            <View style={styles.descriptionFooter}>
+              <Text style={[
+                styles.descriptionCharCount,
+                description.length > 1800 && styles.descriptionCharCountWarn,
+              ]}>
+                {description.length}/2000
+              </Text>
+              {description.trim().length === 0 && (
+                <Text style={styles.descriptionFooterNote}>
+                  Necesaria para poder completar la tarea en Odoo
+                </Text>
+              )}
+            </View>
           </View>
 
           <View style={styles.actionButtons}>
@@ -474,9 +579,93 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#111827',
   },
+  inputError: {
+    borderColor: '#EF4444',
+    borderWidth: 1.5,
+    backgroundColor: '#FFF5F5',
+  },
+  inputValid: {
+    borderColor: '#64c27b',
+    borderWidth: 1.5,
+  },
   textArea: {
-    height: 100,
+    height: 120,
     paddingTop: 12,
+  },
+
+  // ── Descripción ───────────────────────────────────────────────────────────
+  descriptionLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  descriptionOkBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#64c27b',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 10,
+    gap: 3,
+  },
+  descriptionOkText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  descriptionRequiredBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 10,
+    gap: 3,
+  },
+  descriptionRequiredText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#EF4444',
+  },
+  descriptionHint: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
+    gap: 6,
+  },
+  descriptionHintText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#DC2626',
+    lineHeight: 17,
+  },
+  descriptionFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+    paddingHorizontal: 2,
+  },
+  descriptionCharCount: {
+    fontSize: 11,
+    color: '#9CA3AF',
+  },
+  descriptionCharCountWarn: {
+    color: '#F59E0B',
+    fontWeight: '600',
+  },
+  descriptionFooterNote: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    fontStyle: 'italic',
   },
 
   preselectedClient: {

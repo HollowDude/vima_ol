@@ -2,6 +2,8 @@ import { useCallback, useRef } from 'react';
 import { useSyncContext } from '../context/SyncContext';
 import SyncService from '../sync/sync.service';
 import useNetwork from './useNetwork';
+import StorageService from '../storage/storage.service';
+import { STORAGE_KEYS } from '../sync/sync.constants';
 
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 2000;
@@ -177,6 +179,9 @@ export default function useSyncActions() {
 
       // ── Resumen ────────────────────────────────────────────────────────────
       updatePhase('DONE');
+      // 👇 Añade esta línea
+      await StorageService.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
+
       const successCount = Object.values(results).filter(r => r.success).length;
       const totalModules = Object.keys(results).length;
 
