@@ -1,5 +1,5 @@
-const ODOO_URL = 'http://vima2.lombaoestudios.com';
-const DATABASE = 'vima2.lombaoestudios.com';
+const ODOO_URL = 'http://vima.lombaoestudios.com';
+const DATABASE = 'vima.lombaoestudios.com';
 
 class OdooService {
   constructor() {

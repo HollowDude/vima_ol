@@ -163,7 +163,13 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   };
 
   const handleTaskCreated = async () => { await loadTasks(); setCreateModal(false); };
-  const handleTaskUpdated = async () => { await loadTasks(); setSelectedTask(null); };
+  const handleTaskUpdated = async (opts = {}) => {
+    await loadTasks();
+    // Solo cerrar el modal si no se pidió explícitamente mantenerlo abierto
+    if (!opts?.keepModalOpen) {
+      setSelectedTask(null);
+    }
+  };
 
   const handleDayHeaderPress = (dayDateString) => {
     const dayTasks = allTasks.filter(task => {

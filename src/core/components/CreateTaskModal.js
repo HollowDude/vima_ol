@@ -57,7 +57,6 @@ export default function CreateTaskModal({
 }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [descriptionTouched, setDescriptionTouched] = useState(false);
   
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -83,7 +82,6 @@ export default function CreateTaskModal({
   const resetForm = () => {
     setTitle('');
     setDescription('');
-    setDescriptionTouched(false);
     setSelectedDate(new Date());
     setSelectedPriority('media');
     setManagementTags([]);
@@ -114,16 +112,6 @@ export default function CreateTaskModal({
     }
   };
 
-  const shakeDescriptionField = () => {
-    Animated.sequence([
-      Animated.timing(descriptionShake, { toValue: 8,  duration: 60, useNativeDriver: true }),
-      Animated.timing(descriptionShake, { toValue: -8, duration: 60, useNativeDriver: true }),
-      Animated.timing(descriptionShake, { toValue: 6,  duration: 60, useNativeDriver: true }),
-      Animated.timing(descriptionShake, { toValue: -6, duration: 60, useNativeDriver: true }),
-      Animated.timing(descriptionShake, { toValue: 0,  duration: 60, useNativeDriver: true }),
-    ]).start();
-  };
-
   const toggleTag = (tagId) => {
     setManagementTags(prev => {
       if (prev === tagId) return null;
@@ -134,18 +122,6 @@ export default function CreateTaskModal({
   const handleSave = async () => {
     if (!title.trim()) {
       Alert.alert("Error", "Debes escribir un título");
-      return;
-    }
-
-    // Validación de descripción con feedback visual
-    if (!description.trim()) {
-      setDescriptionTouched(true);
-      shakeDescriptionField();
-      Alert.alert(
-        "Descripción requerida",
-        "La descripción es obligatoria.\n\nOdoo no permite completar tareas que no tengan descripción, así que debes añadirla ahora.",
-        [{ text: "Entendido", style: "default" }]
-      );
       return;
     }
 
@@ -232,8 +208,6 @@ export default function CreateTaskModal({
     }
   };
 
-  const descriptionIsEmpty = !description.trim();
-  const showDescriptionError = descriptionTouched && descriptionIsEmpty;
 
   const maxDate = projectFinishDate ? new Date(projectFinishDate) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
   const startOfToday = new Date();
@@ -423,38 +397,20 @@ export default function CreateTaskModal({
           <View style={styles.field}>
             <View style={styles.descriptionLabelRow}>
               <Text style={styles.label}>
-                Descripción <Text style={styles.required}>*</Text>
+                Descripción <Text style={styles.required}></Text>
               </Text>
-              {/* Contador de caracteres / badge de estado */}
-              {description.trim().length > 0 ? (
-                <View style={styles.descriptionOkBadge}>
-                  <Feather name="check" size={11} color="#fff" />
-                  <Text style={styles.descriptionOkText}>OK</Text>
-                </View>
-              ) : (
-                <View style={styles.descriptionRequiredBadge}>
-                  <Feather name="alert-circle" size={11} color="#EF4444" />
-                  <Text style={styles.descriptionRequiredText}>Requerida</Text>
-                </View>
-              )}
             </View>
-
-            <DescriptionHint visible={showDescriptionError} />
 
             <Animated.View style={{ transform: [{ translateX: descriptionShake }] }}>
               <TextInput
                 style={[
                   styles.input,
                   styles.textArea,
-                  showDescriptionError && styles.inputError,
-                  description.trim().length > 0 && styles.inputValid,
                 ]}
                 value={description}
                 onChangeText={(t) => {
                   setDescription(t);
-                  if (t.trim().length > 0) setDescriptionTouched(false);
                 }}
-                onBlur={() => setDescriptionTouched(true)}
                 placeholder="Describe el objetivo de esta tarea, qué debe hacerse y cualquier detalle relevante..."
                 placeholderTextColor="#9CA3AF"
                 multiline
@@ -473,7 +429,7 @@ export default function CreateTaskModal({
               </Text>
               {description.trim().length === 0 && (
                 <Text style={styles.descriptionFooterNote}>
-                  Necesaria para poder completar la tarea en Odoo
+                  Necesaria para poder completar la tarea en Odoo, lo ideal es rellenarse antes de terminar la tarea asignada
                 </Text>
               )}
             </View>
@@ -598,7 +554,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 6,
+    marginBottom: 3,
   },
   descriptionOkBadge: {
     flexDirection: 'row',
@@ -666,6 +622,8 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#9CA3AF',
     fontStyle: 'italic',
+    marginLeft: 15,
+    marginRight: 12,
   },
 
   preselectedClient: {

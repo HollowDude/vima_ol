@@ -45,6 +45,8 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
   const { isOnline } = useNetwork();
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const panY = useRef(new Animated.Value(0)).current;
+  const keyboardScrollRef = useRef(null);
+  const descriptionYOffset = useRef(0);
   
   const [reprogramming, setReprogramming] = useState(false);
   const [newDate, setNewDate] = useState(new Date());
@@ -252,6 +254,13 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
   const handleStartEditDescription = () => {
     setDescriptionDraft(cleanDescription);
     setEditingDescription(true);
+
+    setTimeout(() => {
+      keyboardScrollRef.current?.scrollTo({
+        y: Math.max(0, descriptionYOffset.current - 100),
+        animated: true,
+      });
+    }, 150);
   };
 
   const handleCancelEditDescription = () => {
@@ -271,20 +280,25 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
 
     try {
       setSavingDescription(true);
-      await SyncService.updateTaskLocally(task.id, { description: descriptionDraft.trim() });
 
+      // 1. Guardar localmente y mutar el objeto task para que la UI refleje el cambio
+      await SyncService.updateTaskLocally(task.id, { description: descriptionDraft.trim() });
+      task.description = descriptionDraft.trim();
+
+      // 2. Intentar subir a Odoo si hay conexión, pero sin cerrar el modal
       if (isOnline) {
         try {
           await SyncService.syncPendingChanges();
         } catch (_) {
-          // guardado local, se sincronizará después
+          // Se quedará en pendientes, se sube en la próxima sync
         }
       }
 
-      // Actualizar la vista inmediatamente mutando el objeto task local
-      task.description = descriptionDraft.trim();
       setEditingDescription(false);
-      if (onTaskUpdated) onTaskUpdated();
+
+      // 3. Refrescar la lista de tareas en segundo plano SIN cerrar el modal
+      if (onTaskUpdated) onTaskUpdated({ keepModalOpen: true });
+
     } catch (e) {
       Alert.alert("Error", "No se pudo guardar la descripción");
     } finally {
@@ -582,11 +596,12 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
             <View style={styles.handle} />
           </View>
 
-          <KeyboardAwareScrollView 
-            style={styles.scrollContainer} 
+          <KeyboardAwareScrollView
+            innerRef={ref => { keyboardScrollRef.current = ref; }}
+            style={styles.scrollContainer}
             contentContainerStyle={styles.scrollContent}
             enableOnAndroid={true}
-            extraScrollHeight={100} 
+            extraScrollHeight={150}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
@@ -850,7 +865,10 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
 
             {/* ── Sección Descripción (siempre visible, editable) ─────────── */}
             <View style={styles.divider} />
-            <View style={styles.sectionHeader}>
+            <View
+              style={styles.sectionHeader}
+              onLayout={(e) => { descriptionYOffset.current = e.nativeEvent.layout.y; }}
+            >
               <View style={styles.descriptionTitleRow}>
                 <Text style={styles.sectionTitle}>Descripción</Text>
                 {!taskHasDescription && (
