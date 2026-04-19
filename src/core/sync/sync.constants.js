@@ -21,4 +21,9 @@ export const STORAGE_KEYS = {
   LEADS: '@vima_leads',
   MASTER_CRM_STAGES: '@vima_master_crm_stages',
   PREVIOUS_PROJECT_ID: '@vima_previous_project_id',
+  /**
+   * Cache temporal de tareas fuera del rango del proyecto actual.
+   * Estructura: { batches: [{ fromDate, toDate, tasks, expiresAt }] }
+   */
+  EXTENDED_TASKS: '@vima_extended_tasks',
 };

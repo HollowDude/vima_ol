@@ -214,6 +214,10 @@ class SyncService {
       console.error(' Error limpiando caché de proyecto:', error);
     }
   }
+  async fetchAndCacheTasksForRange(fromDate, toDate) { return Tasks.fetchAndCacheTasksForRange(fromDate, toDate); }
+  async getExtendedTasks()                           { return Tasks.getExtendedTasks(); }
+  async cleanExpiredExtendedTasks()                  { return Tasks.cleanExpiredExtendedTasks(); }
+ 
 }
 
 export default new SyncService();

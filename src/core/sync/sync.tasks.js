@@ -223,3 +223,133 @@ export async function updateTaskLocally(taskId, updates = {}, opts = {}) {
     throw error;
   }
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// TAREAS EXTENDIDAS (históricas / futuras fuera del proyecto actual)
+// Añade este bloque al FINAL de src/core/sync/sync.tasks.js
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * TTL del cache de tareas extendidas en milisegundos.
+ * Cambia este valor según necesites (1 min para pruebas, 30 min para producción).
+ */
+export const EXTENDED_TASKS_TTL_MS = 60 * 1000; // 1 minuto
+
+/**
+ * Busca tareas en Odoo para el rango [fromDateStr, toDateStr] sin filtrar
+ * por proyecto, y las guarda en cache con TTL.
+ *
+ * Si el rango ya está cubierto por un batch válido en cache lo devuelve
+ * directamente sin hacer ninguna petición a la red.
+ *
+ * @param {string} fromDateStr  'YYYY-MM-DD'
+ * @param {string} toDateStr    'YYYY-MM-DD'
+ * @returns {Promise<Array>}    Array de tareas
+ */
+export async function fetchAndCacheTasksForRange(fromDateStr, toDateStr) {
+  const currentUserId = OdooService.uid;
+  if (!currentUserId) throw new Error('Usuario no autenticado');
+
+  const current_user = await Session.getCurrentUser();
+  const current_user_partner_id = current_user?.[0]?.partner_id?.[0] ?? null;
+
+  // ── Leer y limpiar cache ──────────────────────────────────────────────────
+  const stored = (await StorageService.getItem(STORAGE_KEYS.EXTENDED_TASKS)) || { batches: [] };
+  const now = new Date();
+  stored.batches = stored.batches.filter(b => new Date(b.expiresAt) > now);
+
+  // ── Comprobar si el rango ya está cubierto por algún batch ────────────────
+  const coveringBatch = stored.batches.find(
+    b => b.fromDate <= fromDateStr && b.toDate >= toDateStr
+  );
+  if (coveringBatch) {
+    console.log(`[ExtTasks] Cache hit: ${fromDateStr} → ${toDateStr}`);
+    return coveringBatch.tasks;
+  }
+
+  // ── Fetch desde Odoo ──────────────────────────────────────────────────────
+  console.log(`[ExtTasks] Fetching ${fromDateStr} → ${toDateStr} desde Odoo...`);
+
+  /*
+  * Dominio: tareas activas con deadline en el rango Y asignadas al usuario
+  * (por user_ids o por partner_id, igual que syncTasks).
+  *
+  * Notación polaca de Odoo:
+  *   '&', A, '&', B, '&', C, '|', D, E
+  *   → A AND B AND C AND (D OR E)
+  */
+  const domain = [
+    '&',
+    ['date_deadline', '>=', `${fromDateStr} 00:00:00`],
+    '&',
+    ['date_deadline', '<=', `${toDateStr} 23:59:59`],
+    '&',
+    ['active', '=', true],
+    '|',
+    ['user_ids', 'in', [currentUserId]],
+    ['partner_id', '=', current_user_partner_id],
+  ];
+
+  const tasks = await OdooService.searchRead(
+    'project.task',
+    domain,
+    [
+      'id', 'display_name', 'name', 'project_id', 'user_ids',
+      'parent_id', 'child_ids', 'date_deadline', 'stage_id',
+      'description', 'partner_id', 'priority_level', 'management_tags',
+      'state', 'finish_date', 'survey_id', 'task_survey_ids', 'start_date',
+    ],
+    1000
+  );
+
+  console.log(`[ExtTasks] ${tasks.length} tareas obtenidas para ${fromDateStr} → ${toDateStr}`);
+
+  // ── Guardar batch en cache ─────────────────────────────────────────────────
+  const expiresAt = new Date(Date.now() + EXTENDED_TASKS_TTL_MS).toISOString();
+  stored.batches.push({ fromDate: fromDateStr, toDate: toDateStr, tasks, expiresAt });
+  await StorageService.setItem(STORAGE_KEYS.EXTENDED_TASKS, stored);
+
+  return tasks;
+}
+
+/**
+ * Devuelve TODAS las tareas extendidas cacheadas que aún no han expirado,
+ * deduplicadas por id.
+ *
+ * Si detecta batches expirados, los elimina del storage de paso.
+ *
+ * @returns {Promise<Array>}
+ */
+export async function getExtendedTasks() {
+  try {
+    const stored = (await StorageService.getItem(STORAGE_KEYS.EXTENDED_TASKS)) || { batches: [] };
+    const now = new Date();
+    const valid = stored.batches.filter(b => new Date(b.expiresAt) > now);
+
+    // Persistir versión limpia si hubo expirados
+    if (valid.length !== stored.batches.length) {
+      await StorageService.setItem(STORAGE_KEYS.EXTENDED_TASKS, { batches: valid });
+    }
+
+    // Aplanar y deduplicar
+    const all = valid.flatMap(b => b.tasks);
+    return Array.from(new Map(all.map(t => [t.id, t])).values());
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Elimina del storage los batches expirados de tareas extendidas.
+ * Llamar en el montaje del componente para mantener el storage limpio.
+ */
+export async function cleanExpiredExtendedTasks() {
+  try {
+    const stored = (await StorageService.getItem(STORAGE_KEYS.EXTENDED_TASKS)) || { batches: [] };
+    const now = new Date();
+    const valid = stored.batches.filter(b => new Date(b.expiresAt) > now);
+    await StorageService.setItem(STORAGE_KEYS.EXTENDED_TASKS, { batches: valid });
+    console.log(`[ExtTasks] Limpieza: ${stored.batches.length - valid.length} batch(es) expirado(s) eliminado(s)`);
+  } catch {
+    // silencioso
+  }
+}

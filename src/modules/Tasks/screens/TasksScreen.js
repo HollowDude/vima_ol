@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions,
-  RefreshControl, Alert, Modal, FlatList,
+  RefreshControl, Alert, Modal, FlatList, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
@@ -33,6 +33,16 @@ const getLocalDateString = (date) => {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+};
+
+/**
+ * Devuelve el último día del mes al que pertenece dateStr.
+ * Ej: '2026-04-01' → Date(2026-04-30)
+ */
+const getEndOfMonthDate = (dateStr) => {
+  const d = new Date(dateStr);
+  // new Date(year, month+1, 0) = último día del mes
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0);
 };
 
 // ─── DayTasksModal ─────────────────────────────────────────────────────────────
@@ -130,11 +140,33 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   const [pastDays,   setPastDays]   = useState(INITIAL_PAST_DAYS);
   const [futureDays, setFutureDays] = useState(INITIAL_FUTURE_DAYS);
 
+  // ── Tareas extendidas (históricas / futuras fuera del proyecto actual) ────────
+  const [extendedTasks, setExtendedTasks]   = useState([]);
+  const [loadingExtended, setLoadingExtended] = useState(false);
+
+  /**
+   * Límites del proyecto actual:
+   *   projectDateStart → primer día del proyecto (YYYY-MM-DD)
+   *   projectDateEnd   → último día estimado del proyecto (fin de mes)
+   */
+  const [projectDateStart, setProjectDateStart] = useState(null);
+  const [projectDateEnd,   setProjectDateEnd]   = useState(null);
+
   const prevOnline  = usePrevious(isOnline);
   const HOUR_HEIGHT = BASE_HOUR_HEIGHT * zoomLevel;
 
+  // ── Vista unificada: tareas del proyecto + tareas extendidas (sin dupes) ────
+  const allVisibleTasks = useMemo(() => {
+    const localIds = new Set(allTasks.map(t => t.id));
+    return [...allTasks, ...extendedTasks.filter(t => !localIds.has(t.id))];
+  }, [allTasks, extendedTasks]);
+
   // ── Efectos ─────────────────────────────────────────────────────────────────
-  useEffect(() => { loadTasks(); }, []);
+  useEffect(() => {
+    loadTasks();
+    // Limpieza de cache expirado al montar
+    SyncService.cleanExpiredExtendedTasks();
+  }, []);
 
   useEffect(() => {
     if (prevOnline === false && isOnline === true) {
@@ -149,10 +181,110 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
     return () => clearTimeout(timer);
   }, []);
 
-  // ── Cargar días ──────────────────────────────────────────────────────────────
-  const handleLoadPastDays = () => {
+  // ── Cargar datos locales ──────────────────────────────────────────────────────
+  const loadTasks = async () => {
+    try {
+      const result = await SyncService.getAllVisibleTasks();
+      setAllTasks(result.tasks);
+      setProjectId(result.projectId);
+
+      // Límites del proyecto actual
+      const project = await SyncService.getMasterData('current_project');
+      if (project?.date_start) {
+        setProjectDateStart(project.date_start);
+        setProjectDateEnd(getLocalDateString(getEndOfMonthDate(project.date_start)));
+      }
+
+      // Cargar tareas extendidas ya cacheadas (puede haber de sesiones anteriores aún vigentes)
+      const cached = await SyncService.getExtendedTasks();
+      setExtendedTasks(cached);
+    } catch (e) {
+      console.error('Error cargando tareas:', e);
+    }
+  };
+
+  // ─── Fetch de tareas extendidas ──────────────────────────────────────────────
+  /**
+   * Intenta obtener tareas para [fromStr, toStr]:
+   *  - Online  → fetch de Odoo + guarda en cache
+   *  - Offline → usa cache existente si hay cobertura; si no, bloquea y avisa
+   *
+   * @returns {boolean} true si se puede proceder (extiende el calendario)
+   *                    false si el usuario debe cancelar la acción
+   */
+  const fetchExtendedTasks = async (fromStr, toStr, direction) => {
+    if (!isOnline) {
+      // Comprobar si hay algo en cache que cubra (aunque sea parcialmente) el rango
+      const cached = await SyncService.getExtendedTasks();
+      const hasCoverage = cached.some(t => {
+        if (!t.date_deadline) return false;
+        const dStr = (t.date_deadline.split('T')[0] || t.date_deadline.split(' ')[0]);
+        return dStr >= fromStr && dStr <= toStr;
+      });
+
+      if (hasCoverage) {
+        // Usar lo que hay en cache
+        setExtendedTasks(cached);
+        return true;
+      }
+
+      Alert.alert(
+        'Sin conexión',
+        `Necesitas conexión a internet para cargar tareas ${direction === 'past' ? 'anteriores' : 'futuras'} a este periodo.\n\nConéctate e inténtalo de nuevo.`,
+        [{ text: 'Entendido' }]
+      );
+      return false; // Bloquear la extensión del calendario
+    }
+
+    // ── Online: fetch desde Odoo ──────────────────────────────────────────────
+    setLoadingExtended(true);
+    try {
+      const tasks = await SyncService.fetchAndCacheTasksForRange(fromStr, toStr);
+      setExtendedTasks(prev => {
+        const existing = new Set([...allTasks.map(t => t.id), ...prev.map(t => t.id)]);
+        return [...prev, ...tasks.filter(t => !existing.has(t.id))];
+      });
+      return true;
+    } catch (e) {
+      console.error('[ExtTasks] Error en fetch extendido:', e);
+      Alert.alert(
+        'Error',
+        'No se pudieron cargar las tareas del periodo solicitado. Inténtalo de nuevo.'
+      );
+      return false; // Bloquear la extensión del calendario
+    } finally {
+      setLoadingExtended(false);
+    }
+  };
+
+  // ── Cargar días pasados ───────────────────────────────────────────────────────
+  const handleLoadPastDays = async () => {
+    const newPastDays = pastDays + 7;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // El rango de los 7 NUEVOS días que se añaden al calendario
+    const newEarliestDate = new Date(today);
+    newEarliestDate.setDate(today.getDate() - newPastDays);
+
+    const prevEarliestMinus1 = new Date(today);
+    prevEarliestMinus1.setDate(today.getDate() - pastDays - 1);
+
+    const fromStr = getLocalDateString(newEarliestDate);
+    const toStr   = getLocalDateString(prevEarliestMinus1);
+
+    // ¿Estos nuevos días caen fuera del rango del proyecto actual?
+    const needsExtended = projectDateStart && newEarliestDate < new Date(projectDateStart);
+
+    if (needsExtended) {
+      const canProceed = await fetchExtendedTasks(fromStr, toStr, 'past');
+      if (!canProceed) return; // El usuario fue informado; no extender el calendario
+    }
+
+    // Extender el calendario y compensar el scroll para que no salte
     const compensation = 7 * DAY_WIDTH;
-    setPastDays(prev => prev + 7);
+    setPastDays(newPastDays);
     setTimeout(() => {
       scrollViewRef.current?.scrollTo({
         x:        scrollXRef.current + compensation,
@@ -161,8 +293,32 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
     }, 80);
   };
 
-  const handleLoadFutureDays = () => {
-    setFutureDays(prev => prev + 7);
+  // ── Cargar días futuros ───────────────────────────────────────────────────────
+  const handleLoadFutureDays = async () => {
+    const newFutureDays = futureDays + 7;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // El rango de los 7 NUEVOS días que se añaden al calendario
+    const prevLatestPlus1 = new Date(today);
+    prevLatestPlus1.setDate(today.getDate() + futureDays + 1);
+
+    const newLatestDate = new Date(today);
+    newLatestDate.setDate(today.getDate() + newFutureDays);
+
+    const fromStr = getLocalDateString(prevLatestPlus1);
+    const toStr   = getLocalDateString(newLatestDate);
+
+    // ¿Estos nuevos días caen fuera del rango del proyecto actual?
+    const needsExtended = projectDateEnd && newLatestDate > new Date(projectDateEnd);
+
+    if (needsExtended) {
+      const canProceed = await fetchExtendedTasks(fromStr, toStr, 'future');
+      if (!canProceed) return; // No extender el calendario
+    }
+
+    setFutureDays(newFutureDays);
   };
 
   // ── Generación de columnas ───────────────────────────────────────────────────
@@ -192,14 +348,6 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   };
 
   // ── Datos ────────────────────────────────────────────────────────────────────
-  const loadTasks = async () => {
-    try {
-      const result = await SyncService.getAllVisibleTasks();
-      setAllTasks(result.tasks);
-      setProjectId(result.projectId);
-    } catch (e) { console.error('Error cargando tareas:', e); }
-  };
-
   const handleRefresh = async () => {
     if (!isOnline) { Alert.alert('Sin conexión', 'Necesitas internet para sincronizar'); return; }
     try {
@@ -217,7 +365,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
 
   // ── Interacciones ─────────────────────────────────────────────────────────────
   const handleDayHeaderPress = (dayDateString) => {
-    const dayTasks = allTasks.filter(task => {
+    const dayTasks = allVisibleTasks.filter(task => {
       if (!task.date_deadline) return false;
       const d = new Date(task.date_deadline.replace(' ', 'T') + (task.date_deadline.includes('Z') ? '' : 'Z'));
       return getLocalDateString(d) === dayDateString;
@@ -239,7 +387,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   };
 
   const getTasksForDayAndHour = (dayDateString, hour) =>
-    allTasks.filter(task => {
+    allVisibleTasks.filter(task => {
       if (!task.date_deadline) return false;
       let s = task.date_deadline.replace(' ', 'T');
       if (!s.endsWith('Z')) s += 'Z';
@@ -247,11 +395,11 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
       return getLocalDateString(d) === dayDateString && d.getHours() === hour;
     });
 
-  // ── Estadísticas ─────────────────────────────────────────────────────────────
-  const activeCount = allTasks.filter(t =>
+  // ── Estadísticas (sobre todas las tareas visibles) ───────────────────────────
+  const activeCount = allVisibleTasks.filter(t =>
     ['01_in_progress', '02_changes_requested', '03_approved', '04_waiting_normal'].includes(t.state)
   ).length;
-  const doneCount = allTasks.filter(t => t.state === '1_done').length;
+  const doneCount = allVisibleTasks.filter(t => t.state === '1_done').length;
 
   const fabActions = [
     { icon: 'more-vertical', onPress: () => {}                   },
@@ -291,7 +439,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                 <Text style={styles.statLabel}>Finalizadas</Text>
               </View>
               <View style={styles.statItem}>
-                <Text style={styles.statValue}>{allTasks.length}</Text>
+                <Text style={styles.statValue}>{allVisibleTasks.length}</Text>
                 <Text style={styles.statLabel}>Total</Text>
               </View>
             </View>
@@ -309,6 +457,16 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
               </TouchableOpacity>
             </View>
 
+            {/* Banner de carga de tareas extendidas */}
+            {loadingExtended && (
+              <View style={styles.extLoadingBanner}>
+                <ActivityIndicator size="small" color="#64c27b" />
+                <Text style={styles.extLoadingText}>
+                  Cargando tareas del periodo solicitado…
+                </Text>
+              </View>
+            )}
+
             {/* Calendario */}
             <ScrollView
               horizontal
@@ -324,14 +482,20 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
 
                 {/* ── Columna de horas ── */}
                 <View style={styles.hoursColumn}>
-                  {/* Celda esquina → cargar pasado */}
+                  {/* Botón: cargar días pasados */}
                   <TouchableOpacity
-                    style={styles.cornerButton}
-                    onPress={handleLoadPastDays}
-                    activeOpacity={0.75}
+                    style={[styles.cornerButton, loadingExtended && styles.cornerButtonDisabled]}
+                    onPress={loadingExtended ? undefined : handleLoadPastDays}
+                    activeOpacity={loadingExtended ? 1 : 0.75}
                   >
-                    <Feather name="chevrons-left" size={16} color="#fff" />
-                    <Text style={styles.cornerLabel}>-7d</Text>
+                    {loadingExtended ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <>
+                        <Feather name="chevrons-left" size={16} color="#fff" />
+                        <Text style={styles.cornerLabel}>-7d</Text>
+                      </>
+                    )}
                   </TouchableOpacity>
 
                   {HOURS.map(hour => (
@@ -351,6 +515,9 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                         styles.headerCell,
                         day.isPast  && styles.headerPast,
                         day.isToday && styles.headerToday,
+                        // Marcar visualmente los días fuera del proyecto actual
+                        projectDateStart && day.dateString < projectDateStart && styles.headerOutOfProject,
+                        projectDateEnd   && day.dateString > projectDateEnd   && styles.headerOutOfProject,
                       ]}
                       onPress={() => handleDayHeaderPress(day.dateString)}
                       activeOpacity={0.7}
@@ -361,6 +528,11 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                       <Text style={[styles.dayNumber, day.isToday && styles.dayNumberToday]}>
                         {day.dayNumber}
                       </Text>
+                      {/* Indicador sutil de que es zona extendida */}
+                      {((projectDateStart && day.dateString < projectDateStart) ||
+                        (projectDateEnd   && day.dateString > projectDateEnd)) && (
+                        <View style={styles.extendedDot} />
+                      )}
                     </TouchableOpacity>
 
                     {HOURS.map(hour => {
@@ -405,30 +577,34 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                   </View>
                 ))}
 
-                {/*
-                  ── Columna "cargar futuro" ────────────────────────────────
-                  Última columna del scroll. Aparece naturalmente al llegar
-                  al final. Mismos estilos que el cornerButton para que
-                  el usuario relacione ambas acciones visualmente.
-                */}
+                {/* ── Columna "cargar futuro" ── */}
                 <TouchableOpacity
-                  style={[styles.dayColumn, styles.futureColumn, { width: DAY_WIDTH }]}
-                  onPress={handleLoadFutureDays}
-                  activeOpacity={0.75}
+                  style={[
+                    styles.dayColumn,
+                    styles.futureColumn,
+                    { width: DAY_WIDTH },
+                    loadingExtended && styles.cornerButtonDisabled,
+                  ]}
+                  onPress={loadingExtended ? undefined : handleLoadFutureDays}
+                  activeOpacity={loadingExtended ? 1 : 0.75}
                 >
-                  {/* Cabecera — igual que cornerButton */}
                   <View style={styles.cornerButton}>
-                    <Feather name="chevrons-right" size={16} color="#fff" />
-                    <Text style={styles.cornerLabel}>+7d</Text>
+                    {loadingExtended ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <>
+                        <Feather name="chevrons-right" size={16} color="#fff" />
+                        <Text style={styles.cornerLabel}>+7d</Text>
+                      </>
+                    )}
                   </View>
-                  {/* Cuerpo con fondo muy suave */}
                   <View style={styles.futureColumnBody} />
                 </TouchableOpacity>
 
               </View>
             </ScrollView>
 
-            {allTasks.length === 0 && (
+            {allVisibleTasks.length === 0 && !loadingExtended && (
               <View style={styles.emptyState}>
                 <Feather name="calendar" size={48} color="#D1D5DB" />
                 <Text style={styles.emptyText}>No tienes tareas programadas</Text>
@@ -449,7 +625,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
         <TaskDetailModal
           visible={!!selectedTask}
           task={selectedTask}
-          allTasks={allTasks}
+          allTasks={allVisibleTasks}
           onClose={() => setSelectedTask(null)}
           onTaskUpdated={handleTaskUpdated}
         />
@@ -488,12 +664,28 @@ const styles = StyleSheet.create({
   zoomButton: { padding: 8 },
   zoomText:   { fontSize: 13, fontWeight: '600', color: '#6B7280', minWidth: 50, textAlign: 'center' },
 
+  // ── Banner carga extendida ──────────────────────────────────────────────────
+  extLoadingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: '#F0FDF4',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#86EFAC',
+  },
+  extLoadingText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#15803D',
+  },
+
   // ── Calendario ──────────────────────────────────────────────────────────────
   calendarScroll: { flex: 1 },
   calendar:       { flexDirection: 'row' },
   hoursColumn:    { width: 60 },
 
-  // Celda esquina izquierda Y cabecera de la columna futura — estilos compartidos
   cornerButton: {
     height:            60,
     backgroundColor:   '#64c27b',
@@ -503,30 +695,39 @@ const styles = StyleSheet.create({
     borderBottomWidth: 2,
     borderBottomColor: '#4caf50',
   },
+  cornerButtonDisabled: {
+    opacity: 0.6,
+  },
   cornerLabel: {
     color: '#fff', fontSize: 9, fontWeight: '700', letterSpacing: 0.3,
   },
 
-  // Columna futura
-  futureColumn: {
-    overflow: 'hidden',   // recorta el cuerpo al ancho de la columna
-  },
+  futureColumn: { overflow: 'hidden' },
   futureColumnBody: {
     flex:            1,
     backgroundColor: 'rgba(100, 194, 123, 0.06)',
   },
 
-  // Columnas normales
   headerCell: {
     height: 60, justifyContent: 'center', alignItems: 'center',
     borderBottomWidth: 2, borderBottomColor: '#E6E9EF', backgroundColor: '#fcf8f4ff',
   },
-  headerPast:     { backgroundColor: '#f0e6dd' },
-  headerToday:    { backgroundColor: '#e8f5e9', borderBottomColor: '#64c27b' },
+  headerPast:         { backgroundColor: '#f0e6dd' },
+  headerToday:        { backgroundColor: '#e8f5e9', borderBottomColor: '#64c27b' },
+  // Días fuera del rango del proyecto actual → tono ligeramente distinto para orientar al usuario
+  headerOutOfProject: { backgroundColor: '#f3f0ff', borderBottomColor: '#c4b5fd' },
+
   dayName:        { fontSize: 11, color: '#6B7280', textTransform: 'uppercase', fontWeight: '600' },
   dayNameToday:   { color: '#2e7d32' },
   dayNumber:      { fontSize: 18, color: '#0B1B2A', fontWeight: '700', marginTop: 2 },
   dayNumberToday: { color: '#2e7d32' },
+
+  // Punto indicador de zona extendida
+  extendedDot: {
+    width: 5, height: 5, borderRadius: 3,
+    backgroundColor: '#8B5CF6',
+    marginTop: 2,
+  },
 
   hourCell: {
     justifyContent: 'center', paddingRight: 8,
