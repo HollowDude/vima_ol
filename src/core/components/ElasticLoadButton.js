@@ -1,116 +1,83 @@
 import React from 'react';
-import { View, Text, Animated, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 
-const PILL_HEIGHT = 44;
-const PILL_WIDTH  = 78;
+const SIZE = 36;
 
 /**
  * ElasticLoadButton — Overscroll Indicator
  *
- * Indicador visual PURO: no es presionable.
- * Emerge desde fuera del borde lateral del calendario siguiendo la posición
- * vertical del dedo. La lógica del gesto (PanResponder) vive en TasksScreen.
- *
  * Props:
  *   direction         'left' | 'right'
- *   isActive          boolean           — Lado en overscroll activo
- *   pullDistanceAnim  Animated.Value    — Extensión del tirón (0..maxPull)
- *   touchY            number            — Y del toque dentro del calendarWrapper
- *   isReady           boolean           — Umbral alcanzado, disparará al soltar
- *   maxPull           number            — Extensión visual máxima
+ *   isActive          boolean
+ *   pullDistanceAnim  Animated.Value  (0..maxPull)
+ *   touchYAnim        Animated.Value  — Y relativa al calendarWrapper (sin setState)
+ *   isReady           boolean
+ *   maxPull           number
  */
 export default function ElasticLoadButton({
   direction,
   isActive,
   pullDistanceAnim,
-  touchY,
+  touchYAnim,
   isReady,
   maxPull,
 }) {
   const isLeft = direction === 'left';
 
-  // Deslizamiento: el pill parte oculto fuera del borde y entra al tirar
+  // Entrada horizontal desde el borde
   const translateX = pullDistanceAnim.interpolate({
     inputRange:  [0, maxPull],
-    outputRange: isLeft
-      ? [-(PILL_WIDTH + 10), 8]  // emerge por la izquierda
-      : [PILL_WIDTH + 10, -8],   // emerge por la derecha
+    outputRange: isLeft ? [-(SIZE + 4), 6] : [SIZE + 4, -6],
     extrapolate: 'clamp',
   });
 
-  // Opacidad: aparece suavemente al comenzar el tirón
+  // Opacidad
   const opacity = pullDistanceAnim.interpolate({
-    inputRange:  [0, 6, 18],
-    outputRange: [0, 0, 1],
+    inputRange:  [0, 14],
+    outputRange: [0, 1],
     extrapolate: 'clamp',
   });
 
-  // Escala: crece al acercarse al umbral
-  const scale = pullDistanceAnim.interpolate({
-    inputRange:  [0, maxPull * 0.55, maxPull],
-    outputRange: [0.82, 1, 1.07],
-    extrapolate: 'clamp',
+  // Posición vertical: mapeo lineal touchYAnim → touchYAnim - SIZE/2
+  // (centra el icono en la posición del dedo, sin setState)
+  const translateY = touchYAnim.interpolate({
+    inputRange:  [0, 1],
+    outputRange: [-(SIZE / 2), 1 - SIZE / 2],
+    extrapolate: 'extend',
   });
 
   if (!isActive) return null;
-
-  const pillTop = Math.max(
-    PILL_HEIGHT / 2,
-    (touchY ?? 120) - PILL_HEIGHT / 2,
-  );
 
   return (
     <Animated.View
       pointerEvents="none"
       style={[
         styles.wrapper,
-        isLeft ? styles.leftWrapper : styles.rightWrapper,
-        { top: pillTop, opacity, transform: [{ translateX }, { scale }] },
+        isLeft ? styles.left : styles.right,
+        { opacity, transform: [{ translateX }, { translateY }] },
       ]}
     >
-      <View style={[styles.pill, isReady && styles.pillReady]}>
-        <Feather
-          name={isLeft ? 'chevrons-left' : 'chevrons-right'}
-          size={14}
-          color="#fff"
-        />
-        <Text style={styles.label} numberOfLines={1}>
-          {isReady ? '¡Suelta!' : '7 días'}
-        </Text>
-      </View>
+      <Feather
+        name={isLeft ? 'chevron-left' : 'chevron-right'}
+        size={24}
+        color={isReady ? '#2e7d32' : 'rgba(80,80,80,0.4)'}
+      />
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
   wrapper: {
-    position: 'absolute',
-    zIndex:   300,
-    width:    PILL_WIDTH,
-    height:   PILL_HEIGHT,
+    position:       'absolute',
+    top:            0,   // translateY lo mueve — no hay top dinámico
+    zIndex:         300,
+    width:          SIZE,
+    height:         SIZE,
+    alignItems:     'center',
+    justifyContent: 'center',
   },
-  leftWrapper:  { left:  0 },
-  rightWrapper: { right: 0 },
-  pill: {
-    flex:            1,
-    flexDirection:   'row',
-    alignItems:      'center',
-    justifyContent:  'center',
-    backgroundColor: '#64c27b',
-    borderRadius:    PILL_HEIGHT / 2,
-    gap:             5,
-    shadowColor:     '#000',
-    shadowOffset:    { width: 0, height: 3 },
-    shadowOpacity:   0.22,
-    shadowRadius:    7,
-    elevation:       9,
-  },
-  pillReady: { backgroundColor: '#2e7d32' },
-  label: {
-    color:         '#fff',
-    fontSize:      11,
-    fontWeight:    '700',
-    letterSpacing: 0.2,
-  },
+  left:  { left: 0 },
+  right: { right: 0 },
 });
