@@ -144,6 +144,9 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   const [extendedTasks, setExtendedTasks]   = useState([]);
   const [loadingExtended, setLoadingExtended] = useState(false);
 
+  // ── Mes visible en el calendario (se actualiza al hacer scroll) ───────────────
+  const [visibleMonth, setVisibleMonth] = useState('');
+
   /**
    * Límites del proyecto actual:
    *   projectDateStart → primer día del proyecto (YYYY-MM-DD)
@@ -161,11 +164,29 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
     return [...allTasks, ...extendedTasks.filter(t => !localIds.has(t.id))];
   }, [allTasks, extendedTasks]);
 
+  /**
+   * Set de IDs que vienen del cache extendido (no del proyecto actual).
+   * Cualquier tarea en este set se considera "histórica" → solo lectura.
+   */
+  const extendedTaskIds = useMemo(() => new Set(extendedTasks.map(t => t.id)), [extendedTasks]);
+  const cachedDatesSet = useMemo(() => {
+    const set = new Set();
+    extendedTasks.forEach(t => {
+      if (!t.date_deadline) return;
+      const raw = t.date_deadline.replace(' ', 'T');
+      const d = new Date(raw.endsWith('Z') ? raw : raw + 'Z');
+      set.add(getLocalDateString(d));
+    });
+    return set;
+  }, [extendedTasks]);
+
   // ── Efectos ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     loadTasks();
     // Limpieza de cache expirado al montar
     SyncService.cleanExpiredExtendedTasks();
+    // Mes inicial = mes de hoy
+    setVisibleMonth(new Date().toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }));
   }, []);
 
   useEffect(() => {
@@ -214,26 +235,24 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
    */
   const fetchExtendedTasks = async (fromStr, toStr, direction) => {
     if (!isOnline) {
-      // Comprobar si hay algo en cache que cubra (aunque sea parcialmente) el rango
       const cached = await SyncService.getExtendedTasks();
-      const hasCoverage = cached.some(t => {
-        if (!t.date_deadline) return false;
-        const dStr = (t.date_deadline.split('T')[0] || t.date_deadline.split(' ')[0]);
-        return dStr >= fromStr && dStr <= toStr;
-      });
 
-      if (hasCoverage) {
-        // Usar lo que hay en cache
+      if (cached.length > 0) {
+        // Hay datos cacheados en algún punto del timeline extendido.
+        // Permitir que el calendario se amplíe aunque el rango nuevo [fromStr, toStr]
+        // no tenga tareas: el usuario puede desplazarse por días vacíos hasta llegar
+        // a los días que sí tienen tareas cacheadas (ej. Jan 4 tras días vacíos Jan 5-30).
         setExtendedTasks(cached);
         return true;
       }
 
+      // Sin ningún cache extendido disponible → informar y bloquear
       Alert.alert(
         'Sin conexión',
         `Necesitas conexión a internet para cargar tareas ${direction === 'past' ? 'anteriores' : 'futuras'} a este periodo.\n\nConéctate e inténtalo de nuevo.`,
         [{ text: 'Entendido' }]
       );
-      return false; // Bloquear la extensión del calendario
+      return false;
     }
 
     // ── Online: fetch desde Odoo ──────────────────────────────────────────────
@@ -344,7 +363,21 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
 
   // ── Scroll tracking ──────────────────────────────────────────────────────────
   const handleCalendarScroll = (e) => {
-    scrollXRef.current = e.nativeEvent.contentOffset.x;
+    const x = e.nativeEvent.contentOffset.x;
+    scrollXRef.current = x;
+
+    // Calcular qué día está en el centro de la pantalla visible
+    const screenWidth = Dimensions.get('window').width;
+    // La columna de horas (60px) siempre está fija a la izquierda del scroll horizontal,
+    // así que el centro visual de los días es la mitad de la pantalla menos 60px / DAY_WIDTH
+    const centerOffset = x + (screenWidth - 60) / 2;
+    const centerDayIndex = Math.round(centerOffset / DAY_WIDTH);
+    const clampedIndex = Math.max(0, Math.min(centerDayIndex, days.length - 1));
+    const centerDay = days[clampedIndex];
+    if (centerDay) {
+      const label = centerDay.date.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+      setVisibleMonth(prev => (prev !== label ? label : prev));
+    }
   };
 
   // ── Datos ────────────────────────────────────────────────────────────────────
@@ -457,13 +490,11 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
               </TouchableOpacity>
             </View>
 
-            {/* Banner de carga de tareas extendidas */}
-            {loadingExtended && (
-              <View style={styles.extLoadingBanner}>
-                <ActivityIndicator size="small" color="#64c27b" />
-                <Text style={styles.extLoadingText}>
-                  Cargando tareas del periodo solicitado…
-                </Text>
+            {/* Indicador de mes visible */}
+            {visibleMonth !== '' && (
+              <View style={styles.monthIndicator}>
+                <Feather name="calendar" size={13} color="#64c27b" />
+                <Text style={styles.monthIndicatorText}>{visibleMonth}</Text>
               </View>
             )}
 
@@ -491,10 +522,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                     {loadingExtended ? (
                       <ActivityIndicator size="small" color="#fff" />
                     ) : (
-                      <>
-                        <Feather name="chevrons-left" size={16} color="#fff" />
-                        <Text style={styles.cornerLabel}>-7d</Text>
-                      </>
+                      <Feather name="skip-back" size={18} color="#fff" />
                     )}
                   </TouchableOpacity>
 
@@ -508,31 +536,60 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                 </View>
 
                 {/* ── Columnas de días ── */}
-                {days.map((day, dayIndex) => (
+                {days.map((day, dayIndex) => {
+                  const isCached = cachedDatesSet.has(day.dateString);
+                  const isFuture = !day.isPast && !day.isToday;
+
+                  return (
                   <View key={dayIndex} style={[styles.dayColumn, { width: DAY_WIDTH }]}>
                     <TouchableOpacity
                       style={[
                         styles.headerCell,
                         day.isPast  && styles.headerPast,
+                        isFuture    && styles.headerFuture,
                         day.isToday && styles.headerToday,
-                        // Marcar visualmente los días fuera del proyecto actual
-                        projectDateStart && day.dateString < projectDateStart && styles.headerOutOfProject,
-                        projectDateEnd   && day.dateString > projectDateEnd   && styles.headerOutOfProject,
+                        (projectDateStart && day.dateString < projectDateStart) ||
+                        (projectDateEnd   && day.dateString > projectDateEnd)
+                          ? styles.headerOutOfProject
+                          : null,
                       ]}
                       onPress={() => handleDayHeaderPress(day.dateString)}
                       activeOpacity={0.7}
                     >
-                      <Text style={[styles.dayName,   day.isToday && styles.dayNameToday]}>
+                      {/* Nombre del día */}
+                      <Text style={[
+                        styles.dayName,
+                        day.isPast  && styles.dayNamePast,
+                        isFuture    && styles.dayNameFuture,
+                        day.isToday && styles.dayNameToday,
+                      ]}>
                         {day.dayName}
                       </Text>
-                      <Text style={[styles.dayNumber, day.isToday && styles.dayNumberToday]}>
-                        {day.dayNumber}
-                      </Text>
-                      {/* Indicador sutil de que es zona extendida */}
-                      {((projectDateStart && day.dateString < projectDateStart) ||
-                        (projectDateEnd   && day.dateString > projectDateEnd)) && (
-                        <View style={styles.extendedDot} />
+
+                      {/* Número del día — hoy va dentro de un círculo */}
+                      {day.isToday ? (
+                        <View style={styles.todayCircle}>
+                          <Text style={styles.todayCircleText}>{day.dayNumber}</Text>
+                        </View>
+                      ) : (
+                        <Text style={[
+                          styles.dayNumber,
+                          day.isPast && styles.dayNumberPast,
+                          isFuture   && styles.dayNumberFuture,
+                        ]}>
+                          {day.dayNumber}
+                        </Text>
                       )}
+
+                      {/* Fila de marcadores inferiores */}
+                      <View style={styles.dayMarkerRow}>
+                        {/* Marcador de día con cache extendido */}
+                        {isCached && (
+                          <View style={[styles.dayMarker, styles.dayMarkerCached]}>
+                            <Feather name="cloud" size={8} color="#7C3AED" />
+                          </View>
+                        )}
+                      </View>
                     </TouchableOpacity>
 
                     {HOURS.map(hour => {
@@ -575,14 +632,13 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                       );
                     })}
                   </View>
-                ))}
+                  );
+                })}
 
                 {/* ── Columna "cargar futuro" ── */}
                 <TouchableOpacity
                   style={[
-                    styles.dayColumn,
-                    styles.futureColumn,
-                    { width: DAY_WIDTH },
+                    styles.futureNavColumn,
                     loadingExtended && styles.cornerButtonDisabled,
                   ]}
                   onPress={loadingExtended ? undefined : handleLoadFutureDays}
@@ -592,10 +648,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                     {loadingExtended ? (
                       <ActivityIndicator size="small" color="#fff" />
                     ) : (
-                      <>
-                        <Feather name="chevrons-right" size={16} color="#fff" />
-                        <Text style={styles.cornerLabel}>+7d</Text>
-                      </>
+                      <Feather name="skip-forward" size={18} color="#fff" />
                     )}
                   </View>
                   <View style={styles.futureColumnBody} />
@@ -626,6 +679,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
           visible={!!selectedTask}
           task={selectedTask}
           allTasks={allVisibleTasks}
+          isHistorical={selectedTask ? extendedTaskIds.has(selectedTask.id) : false}
           onClose={() => setSelectedTask(null)}
           onTaskUpdated={handleTaskUpdated}
         />
@@ -664,22 +718,25 @@ const styles = StyleSheet.create({
   zoomButton: { padding: 8 },
   zoomText:   { fontSize: 13, fontWeight: '600', color: '#6B7280', minWidth: 50, textAlign: 'center' },
 
-  // ── Banner carga extendida ──────────────────────────────────────────────────
-  extLoadingBanner: {
+  // ── Indicador de mes ────────────────────────────────────────────────────────
+  monthIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
-    backgroundColor: '#F0FDF4',
-    paddingVertical: 10,
+    gap: 6,
+    paddingVertical: 6,
+    backgroundColor: '#F9FAFB',
     borderBottomWidth: 1,
-    borderBottomColor: '#86EFAC',
+    borderBottomColor: '#E5E7EB',
   },
-  extLoadingText: {
+  monthIndicatorText: {
     fontSize: 13,
-    fontWeight: '600',
-    color: '#15803D',
+    fontWeight: '700',
+    color: '#374151',
+    textTransform: 'capitalize',
   },
+
+  // ── Banner carga extendida ──────────────────────────────────────────────────
 
   // ── Calendario ──────────────────────────────────────────────────────────────
   calendarScroll: { flex: 1 },
@@ -687,47 +744,77 @@ const styles = StyleSheet.create({
   hoursColumn:    { width: 60 },
 
   cornerButton: {
-    height:            60,
-    backgroundColor:   '#64c27b',
+    height:            72,
+    width:             60,
     alignItems:        'center',
     justifyContent:    'center',
-    gap:               2,
-    borderBottomWidth: 2,
-    borderBottomColor: '#4caf50',
+    backgroundColor:   '#1a1a2e',
+    borderBottomWidth: 3,
+    borderBottomColor: '#22C55E',
   },
   cornerButtonDisabled: {
-    opacity: 0.6,
-  },
-  cornerLabel: {
-    color: '#fff', fontSize: 9, fontWeight: '700', letterSpacing: 0.3,
+    opacity: 0.5,
   },
 
-  futureColumn: { overflow: 'hidden' },
+  // Columna de navegación al futuro: mismas dimensiones que hoursColumn
+  futureNavColumn: {
+    width:    60,
+    overflow: 'hidden',
+  },
   futureColumnBody: {
     flex:            1,
-    backgroundColor: 'rgba(100, 194, 123, 0.06)',
+    backgroundColor: 'rgba(59, 130, 246, 0.04)',
   },
 
   headerCell: {
-    height: 60, justifyContent: 'center', alignItems: 'center',
+    height: 72,                           // un poco más alto para acomodar la fila de marcadores
+    justifyContent: 'center', alignItems: 'center',
     borderBottomWidth: 2, borderBottomColor: '#E6E9EF', backgroundColor: '#fcf8f4ff',
+    paddingVertical: 4,
   },
-  headerPast:         { backgroundColor: '#f0e6dd' },
-  headerToday:        { backgroundColor: '#e8f5e9', borderBottomColor: '#64c27b' },
-  // Días fuera del rango del proyecto actual → tono ligeramente distinto para orientar al usuario
-  headerOutOfProject: { backgroundColor: '#f3f0ff', borderBottomColor: '#c4b5fd' },
+  // ── Fondos de cabecera por situación ──────────────────────────────────────
+  headerPast:         { backgroundColor: '#F3F4F6' },
+  headerFuture:       { backgroundColor: '#EFF6FF' },
+  headerToday:        { backgroundColor: '#DCFCE7', borderBottomColor: '#22C55E', borderBottomWidth: 3 },
+  headerOutOfProject: { backgroundColor: '#F3F0FF', borderBottomColor: '#C4B5FD' },
 
-  dayName:        { fontSize: 11, color: '#6B7280', textTransform: 'uppercase', fontWeight: '600' },
-  dayNameToday:   { color: '#2e7d32' },
-  dayNumber:      { fontSize: 18, color: '#0B1B2A', fontWeight: '700', marginTop: 2 },
-  dayNumberToday: { color: '#2e7d32' },
+  // ── Nombre del día ─────────────────────────────────────────────────────────
+  dayName:        { fontSize: 10, textTransform: 'uppercase', fontWeight: '700', letterSpacing: 0.4 },
+  dayNamePast:    { color: '#9CA3AF' },
+  dayNameFuture:  { color: '#60A5FA' },
+  dayNameToday:   { color: '#15803D', fontSize: 11 },
 
-  // Punto indicador de zona extendida
-  extendedDot: {
-    width: 5, height: 5, borderRadius: 3,
-    backgroundColor: '#8B5CF6',
+  // ── Número del día ─────────────────────────────────────────────────────────
+  dayNumber:        { fontSize: 18, fontWeight: '700', marginTop: 1 },
+  dayNumberPast:    { color: '#9CA3AF' },
+  dayNumberFuture:  { color: '#3B82F6' },
+
+  // ── Círculo del día actual ─────────────────────────────────────────────────
+  todayCircle: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: '#22C55E',
+    alignItems: 'center', justifyContent: 'center',
     marginTop: 2,
+    shadowColor: '#22C55E',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+    elevation: 4,
   },
+  todayCircleText: { fontSize: 17, fontWeight: '800', color: '#fff' },
+
+  // ── Fila de marcadores inferiores ──────────────────────────────────────────
+  dayMarkerRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 3, marginTop: 3, height: 14,
+  },
+  dayMarker: {
+    width: 14, height: 14, borderRadius: 7,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  dayMarkerPast:   { backgroundColor: '#E5E7EB' },
+  dayMarkerFuture: { backgroundColor: '#DBEAFE' },
+  dayMarkerCached: { backgroundColor: '#EDE9FE' },
 
   hourCell: {
     justifyContent: 'center', paddingRight: 8,

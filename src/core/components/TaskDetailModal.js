@@ -41,7 +41,7 @@ const formatForOdoo = (dateObj) => {
   return dateObj.toISOString().replace('T', ' ').split('.')[0];
 };
 
-export default function TaskDetailModal({ visible, task, allTasks, onClose, onTaskUpdated }) {
+export default function TaskDetailModal({ visible, task, allTasks, isHistorical = false, onClose, onTaskUpdated }) {
   const { isOnline } = useNetwork();
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const panY = useRef(new Animated.Value(0)).current;
@@ -68,7 +68,6 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
   const [loadingAttachments, setLoadingAttachments] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
-  // ── Estado para edición de descripción ────────────────────────────────────
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [savingDescription, setSavingDescription] = useState(false);
@@ -78,20 +77,11 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderMove: (_, gestureState) => {
-        if (gestureState.dy > 0) {
-          panY.setValue(gestureState.dy);
-        }
+        if (gestureState.dy > 0) panY.setValue(gestureState.dy);
       },
       onPanResponderRelease: (_, gestureState) => {
-        if (gestureState.dy > 100) {
-          closeModal();
-        } else {
-          Animated.spring(panY, {
-            toValue: 0,
-            useNativeDriver: true,
-            bounciness: 8,
-          }).start();
-        }
+        if (gestureState.dy > 100) closeModal();
+        else Animated.spring(panY, { toValue: 0, useNativeDriver: true, bounciness: 8 }).start();
       },
     })
   ).current;
@@ -114,8 +104,7 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
       loadSurveys();
       
       if (task.date_deadline) {
-        const parsedDate = parseOdooDate(task.date_deadline);
-        setNewDate(parsedDate);
+        setNewDate(parseOdooDate(task.date_deadline));
       } else {
         setNewDate(new Date());
       }
@@ -124,40 +113,29 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
       Animated.spring(slideAnim, {
         toValue: SCREEN_HEIGHT - MODAL_HEIGHT,
         useNativeDriver: true,
-        damping: 20,
-        mass: 1,
-        stiffness: 100,
+        damping: 20, mass: 1, stiffness: 100,
       }).start();
     } else {
-      Animated.timing(slideAnim, {
-        toValue: SCREEN_HEIGHT,
-        duration: 250,
-        useNativeDriver: true,
-      }).start();
+      Animated.timing(slideAnim, { toValue: SCREEN_HEIGHT, duration: 250, useNativeDriver: true }).start();
     }
   }, [visible, task]);
 
   const loadAssociatedLead = async () => {
-    if (!task || !task.id) return;
+    if (!task?.id) return;
     try {
       const lead = await SyncService.getLeadByTaskId(task.id);
       setAssociatedLead(lead);
-    } catch (error) {
-      setAssociatedLead(null);
-    }
+    } catch { setAssociatedLead(null); }
   };
 
   const loadAttachmentsCount = async () => {
-    if (!task || !task.id) return;
+    if (!task?.id) return;
     try {
       setLoadingAttachments(true);
       const attachments = await SyncService.getTaskAttachments(task.id);
       setAttachmentsCount(attachments.length);
-    } catch (error) {
-      setAttachmentsCount(0);
-    } finally {
-      setLoadingAttachments(false);
-    }
+    } catch { setAttachmentsCount(0); }
+    finally { setLoadingAttachments(false); }
   };
 
   const getReprogrammingRange = () => {
@@ -165,82 +143,59 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
 
-    let minDate;
-    if (task.start_date) {
-      minDate = parseOdooDate(task.start_date); 
-    } else {
-      minDate = new Date(currentYear, currentMonth, 1);
-    }
+    let minDate = task.start_date
+      ? parseOdooDate(task.start_date)
+      : new Date(currentYear, currentMonth, 1);
     minDate.setHours(0, 0, 0, 0);
 
-    let maxDate;
-    if (task.finish_date) {
-      maxDate = parseOdooDate(task.finish_date);
-    } else {
-      maxDate = new Date(currentYear, currentMonth + 1, 0);
-    }
+    let maxDate = task.finish_date
+      ? parseOdooDate(task.finish_date)
+      : new Date(currentYear, currentMonth + 1, 0);
     maxDate.setHours(23, 59, 59, 999);
 
     return { minDate, maxDate };
   };
 
   const loadSurveys = async () => {
-    if (!task || !task.id) return;
+    if (!task?.id) return;
     try {
       setLoadingSurveys(true);
       const surveys = await SyncService.getSurveysForTask(task.id);
-      
       const enrichedSurveys = await Promise.all(surveys.map(async (s) => {
         const localProgress = await SyncService.getSurveyProgress(task.id, s.id, s.relation_id);
-        let isCompleted = false;
-        if (s.survey_user_input_id) isCompleted = true;
-        if (localProgress && localProgress.state === 'done') isCompleted = true;
-
+        let isCompleted = !!s.survey_user_input_id;
+        if (localProgress?.state === 'done') isCompleted = true;
         return { ...s, isCompleted, localProgress };
       }));
-
       setTaskSurveys(enrichedSurveys);
     } catch (error) {
       console.error("Error cargando encuestas:", error);
-    } finally {
-      setLoadingSurveys(false);
-    }
+    } finally { setLoadingSurveys(false); }
   };
 
   const loadTags = async () => {
     try {
       const tags = await SyncService.getManagementTags();
       setManagementTags(tags);
-    } catch (e) {
-      console.error('Error cargando tags:', e);
-    }
+    } catch (e) { console.error('Error cargando tags:', e); }
   };
 
   const checkIfUserOwnTask = async () => {
     try {
       const currentUser = await SyncService.getCurrentUser();
-      const currentUserPartnerId = currentUser && currentUser[0] && currentUser[0].partner_id 
-        ? currentUser[0].partner_id[0] 
-        : null;
-      
-      const taskPartnerId = task.partner_id && 
-        (Array.isArray(task.partner_id) ? task.partner_id[0] : task.partner_id);
-      
+      const currentUserPartnerId = currentUser?.[0]?.partner_id?.[0] ?? null;
+      const taskPartnerId = Array.isArray(task.partner_id) ? task.partner_id[0] : task.partner_id;
       setIsUserOwnTask(taskPartnerId === currentUserPartnerId);
-    } catch (error) {
-      setIsUserOwnTask(false);
-    }
+    } catch { setIsUserOwnTask(false); }
   };
 
   const closeModal = () => {
-    Animated.timing(slideAnim, {
-      toValue: SCREEN_HEIGHT,
-      duration: 250,
-      useNativeDriver: true,
-    }).start(() => onClose());
+    Animated.timing(slideAnim, { toValue: SCREEN_HEIGHT, duration: 250, useNativeDriver: true })
+      .start(() => onClose());
   };
 
   if (!task) return null;
+
   const totalSurveys = taskSurveys.length;
   const completedSurveys = taskSurveys.filter(s => s.isCompleted).length;
   const hasSurveys = totalSurveys > 0;
@@ -249,16 +204,13 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
   const cleanDescription = stripHtml(task.description);
   const taskHasDescription = cleanDescription.trim().length > 0;
 
-  // ── Edición de descripción ────────────────────────────────────────────────
-
   const handleStartEditDescription = () => {
+    if (isHistorical) return;
     setDescriptionDraft(cleanDescription);
     setEditingDescription(true);
-
     setTimeout(() => {
       keyboardScrollRef.current?.scrollTo({
-        y: Math.max(0, descriptionYOffset.current - 100),
-        animated: true,
+        y: Math.max(0, descriptionYOffset.current - 100), animated: true,
       });
     }, 150);
   };
@@ -270,157 +222,89 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
 
   const handleSaveDescription = async () => {
     if (!descriptionDraft.trim()) {
-      Alert.alert(
-        "Descripción vacía",
-        "Debes escribir algo en la descripción. Es obligatoria para poder completar la tarea en Odoo.",
-        [{ text: "Entendido" }]
-      );
+      Alert.alert("Descripción vacía", "Debes escribir algo en la descripción.", [{ text: "Entendido" }]);
       return;
     }
-
     try {
       setSavingDescription(true);
-
-      // 1. Guardar localmente y mutar el objeto task para que la UI refleje el cambio
       await SyncService.updateTaskLocally(task.id, { description: descriptionDraft.trim() });
       task.description = descriptionDraft.trim();
-
-      // 2. Intentar subir a Odoo si hay conexión, pero sin cerrar el modal
       if (isOnline) {
-        try {
-          await SyncService.syncPendingChanges();
-        } catch (_) {
-          // Se quedará en pendientes, se sube en la próxima sync
-        }
+        try { await SyncService.syncPendingChanges(); } catch (_) {}
       }
-
       setEditingDescription(false);
-
-      // 3. Refrescar la lista de tareas en segundo plano SIN cerrar el modal
       if (onTaskUpdated) onTaskUpdated({ keepModalOpen: true });
-
     } catch (e) {
       Alert.alert("Error", "No se pudo guardar la descripción");
-    } finally {
-      setSavingDescription(false);
-    }
+    } finally { setSavingDescription(false); }
   };
 
-  // ── Completar tarea con guardia de descripción ─────────────────────────────
-
   const handleOpenSurvey = (survey) => {
-    setSelectedSurvey({ 
-      surveyId: survey.id, 
-      relationId: survey.relation_id,
-    });
+    if (isHistorical) return;
+    setSelectedSurvey({ surveyId: survey.id, relationId: survey.relation_id });
     setShowSurveyModal(true);
   };
 
   const handleCompleteTask = async () => {
     try {
       await SyncService.updateTaskLocally(task.id, { state: '1_done' });
-      
       if (isOnline) {
         setSyncing(true);
         try {
           await SyncService.syncPendingChanges();
-          Alert.alert(
-            '✓ Tarea completada', 
-            'La tarea se ha marcado como finalizada y sincronizado con el servidor.'
-          );
-        } catch (syncError) {
-          Alert.alert(
-            '✓ Tarea completada (offline)', 
-            'La tarea se ha marcado como finalizada.\n\nSe sincronizará cuando recuperes la conexión.'
-          );
-        } finally {
-          setSyncing(false);
-        }
+          Alert.alert('✓ Tarea completada', 'La tarea se ha marcado como finalizada y sincronizado con el servidor.');
+        } catch {
+          Alert.alert('✓ Tarea completada (offline)', 'La tarea se ha marcado como finalizada.\n\nSe sincronizará cuando recuperes la conexión.');
+        } finally { setSyncing(false); }
       } else {
-        Alert.alert(
-          '✓ Tarea completada (offline)', 
-          'La tarea se ha marcado como finalizada.\n\nSe sincronizará automáticamente cuando recuperes la conexión.'
-        );
+        Alert.alert('✓ Tarea completada (offline)', 'La tarea se ha marcado como finalizada.\n\nSe sincronizará automáticamente cuando recuperes la conexión.');
       }
-      
       if (onTaskUpdated) onTaskUpdated();
       closeModal();
-    } catch (error) {
-      Alert.alert('Error', 'No se pudo completar la tarea.');
-    }
+    } catch { Alert.alert('Error', 'No se pudo completar la tarea.'); }
   };
 
-  /**
-   * Muestra el alert para añadir descripción antes de completar.
-   * Si el usuario acepta, abre el editor de descripción.
-   */
   const promptAddDescriptionThenComplete = () => {
     Alert.alert(
       "Descripción requerida",
       "Odoo no permite completar tareas sin descripción.\n\n¿Quieres añadir una ahora para poder completarla?",
       [
         { text: "Cancelar", style: "cancel" },
-        {
-          text: "Añadir descripción",
-          style: "default",
-          onPress: handleStartEditDescription,
-        },
+        { text: "Añadir descripción", style: "default", onPress: handleStartEditDescription },
       ]
     );
   };
 
   const handleTaskAction = () => {
-    if (task.state === '1_done') {
-      Alert.alert('Información', 'Esta tarea ya ha sido completada.');
-      return;
-    }
-
+    if (isHistorical) return;
+    if (task.state === '1_done') { Alert.alert('Información', 'Esta tarea ya ha sido completada.'); return; }
     if (hasSurveys && !allSurveysDone) {
-      Alert.alert(
-        "Encuestas pendientes",
-        `Debes completar las ${totalSurveys - completedSurveys} encuestas restantes antes de finalizar la tarea.`,
-        [{ text: "Entendido", style: "cancel" }]
-      );
+      Alert.alert("Encuestas pendientes", `Debes completar las ${totalSurveys - completedSurveys} encuestas restantes antes de finalizar la tarea.`, [{ text: "Entendido", style: "cancel" }]);
       return;
     }
-
-    // Guardia de descripción — se comprueba ANTES de confirmar el completado
-    if (!taskHasDescription) {
-      promptAddDescriptionThenComplete();
-      return;
-    }
-
-    if (isUserOwnTask) {
-      showStateChangeOptions();
-      return;
-    }
-    
+    if (!taskHasDescription) { promptAddDescriptionThenComplete(); return; }
+    if (isUserOwnTask) { showStateChangeOptions(); return; }
     Alert.alert(
       'Completar Tarea',
-      hasSurveys 
-        ? 'Todas las encuestas están completas. ¿Marcar esta tarea como finalizada?'
-        : '¿Deseas marcar esta tarea como finalizada?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Completar', style: 'default', onPress: handleCompleteTask }
-      ]
+      hasSurveys ? 'Todas las encuestas están completas. ¿Marcar esta tarea como finalizada?' : '¿Deseas marcar esta tarea como finalizada?',
+      [{ text: 'Cancelar', style: 'cancel' }, { text: 'Completar', style: 'default', onPress: handleCompleteTask }]
     );
   };
 
   const getStatusInfo = () => {
     const s = task.state;
-    if (s === '01_in_progress') return { label: 'En Proceso', color: '#64c27b', icon: 'play' };
-    if (s === '02_changes_requested') return { label: 'Cambios Solic.', color: '#F59E0B', icon: 'alert-circle' };
-    if (s === '03_approved') return { label: 'Aprobado', color: '#10B981', icon: 'check-circle' };
-    if (s === '1_done') return { label: 'Hecho', color: '#22c55e', icon: 'check' };
-    if (s === '1_canceled') return { label: 'Cancelado', color: '#EF4444', icon: 'x-circle' };
-    if (s === '04_waiting_normal') return { label: 'En Espera', color: '#9CA3AF', icon: 'clock' };
+    if (s === '01_in_progress')      return { label: 'En Proceso',      color: '#64c27b', icon: 'play' };
+    if (s === '02_changes_requested') return { label: 'Cambios Solic.',  color: '#F59E0B', icon: 'alert-circle' };
+    if (s === '03_approved')          return { label: 'Aprobado',        color: '#10B981', icon: 'check-circle' };
+    if (s === '1_done')               return { label: 'Hecho',           color: '#22c55e', icon: 'check' };
+    if (s === '1_canceled')           return { label: 'Cancelado',       color: '#EF4444', icon: 'x-circle' };
+    if (s === '04_waiting_normal')    return { label: 'En Espera',       color: '#9CA3AF', icon: 'clock' };
     return { label: 'Desconocido', color: '#9CA3AF', icon: 'help-circle' };
   };
 
   const getPriorityInfo = () => {
     const p = task.priority_level || 'baja';
-    if (p === 'alta') return { label: 'Prioridad Alta', color: '#EF4444', icon: 'alert-triangle' };
+    if (p === 'alta')  return { label: 'Prioridad Alta',  color: '#EF4444', icon: 'alert-triangle' };
     if (p === 'media') return { label: 'Prioridad Media', color: '#F59E0B', icon: 'minus' };
     return { label: 'Prioridad Baja', color: '#64c27b', icon: 'chevron-down' };
   };
@@ -431,37 +315,19 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
   };
 
   const handleReprogram = async () => {
-    if (!reason.trim()) {
-      Alert.alert("Razón requerida", "Debes proporcionar una razón para la reprogramación");
-      return;
-    }
+    if (!reason.trim()) { Alert.alert("Razón requerida", "Debes proporcionar una razón para la reprogramación"); return; }
     await processReschedule();
   };
 
   const processReschedule = async () => {
     const { minDate, maxDate } = getReprogrammingRange();
-    
     const selectedTime = newDate.getTime();
-    if (selectedTime < minDate.getTime()) {
-      Alert.alert("Fecha inválida", `No puedes reprogramar antes del ${minDate.toLocaleDateString('es-ES')}.`);
-      return;
-    }
-    if (selectedTime > maxDate.getTime()) {
-      Alert.alert("Fecha inválida", `No puedes reprogramar después del ${maxDate.toLocaleDateString('es-ES')}.`);
-      return;
-    }
-
+    if (selectedTime < minDate.getTime()) { Alert.alert("Fecha inválida", `No puedes reprogramar antes del ${minDate.toLocaleDateString('es-ES')}.`); return; }
+    if (selectedTime > maxDate.getTime()) { Alert.alert("Fecha inválida", `No puedes reprogramar después del ${maxDate.toLocaleDateString('es-ES')}.`); return; }
     const utcDateStr = formatForOdoo(newDate);
-    
     try {
       await SyncService.updateTaskLocally(task.id, { date_deadline: utcDateStr });
-      await SyncService.createReasonWizard('reason.wizard', {
-        task_id: task.id,
-        new_date: utcDateStr,
-        old_date: task.date_deadline,
-        reason: reason
-      });
-
+      await SyncService.createReasonWizard('reason.wizard', { task_id: task.id, new_date: utcDateStr, old_date: task.date_deadline, reason });
       if (isOnline) {
         setSyncing(true);
         try {
@@ -469,19 +335,14 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
           Alert.alert("✓ Reprogramada", "La tarea se ha actualizado y sincronizado con el servidor.");
         } catch (_) {
           Alert.alert("✓ Reprogramada (offline)", "La tarea se actualizará cuando recuperes la conexión.");
-        } finally {
-          setSyncing(false);
-        }
+        } finally { setSyncing(false); }
       } else {
         Alert.alert("✓ Reprogramada (offline)", "La tarea se actualizará cuando recuperes la conexión.");
       }
-      
       setReprogramming(false);
       setReason('');
       if (onTaskUpdated) onTaskUpdated();
-    } catch (e) {
-      Alert.alert("Error", "No se pudo reprogramar");
-    }
+    } catch { Alert.alert("Error", "No se pudo reprogramar"); }
   };
 
   const showStateChangeOptions = () => {
@@ -497,14 +358,10 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
     const options = stateOptions.map(opt => ({
       text: `${opt.name}${opt.id === currentState ? ' (Actual)' : ''}`,
       onPress: () => {
-        // Si quieren pasar a "done" y no hay descripción, bloqueamos
-        if (opt.id === '1_done' && !taskHasDescription) {
-          promptAddDescriptionThenComplete();
-          return;
-        }
+        if (opt.id === '1_done' && !taskHasDescription) { promptAddDescriptionThenComplete(); return; }
         handleStateChange(opt.id);
       },
-      style: opt.id === currentState ? 'cancel' : 'default'
+      style: opt.id === currentState ? 'cancel' : 'default',
     }));
     options.push({ text: 'Cancelar', style: 'cancel' });
     Alert.alert('Cambiar Estado', 'Selecciona el nuevo estado para esta tarea:', options);
@@ -514,7 +371,6 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
     if (newState === task.state) return;
     try {
       await SyncService.updateTaskLocally(task.id, { state: newState });
-      
       if (isOnline) {
         setSyncing(true);
         try {
@@ -522,17 +378,12 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
           Alert.alert('✓ Estado actualizado', 'El cambio se ha sincronizado con el servidor.');
         } catch (_) {
           Alert.alert('✓ Estado actualizado (offline)', 'El cambio se sincronizará cuando recuperes la conexión.');
-        } finally {
-          setSyncing(false);
-        }
+        } finally { setSyncing(false); }
       } else {
         Alert.alert('✓ Estado actualizado (offline)', 'El cambio se sincronizará cuando recuperes la conexión.');
       }
-      
       if (onTaskUpdated) onTaskUpdated();
-    } catch (error) {
-      Alert.alert('Error', 'No se pudo actualizar el estado de la tarea.');
-    }
+    } catch { Alert.alert('Error', 'No se pudo actualizar el estado de la tarea.'); }
   };
 
   const handleSurveyComplete = async () => {
@@ -543,14 +394,14 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
   const statusInfo   = getStatusInfo();
   const priorityInfo = getPriorityInfo();
   const taskTags     = getTagNames();
-
   const { minDate, maxDate } = getReprogrammingRange();
+  const completeButtonBlocked = !taskHasDescription && task.state !== '1_done';
 
-  const displayDeadline = task.date_deadline 
+  const displayDeadline = task.date_deadline
     ? parseOdooDate(task.date_deadline).toLocaleString('es-ES', {
         weekday: 'long', day: '2-digit', month: 'long', year: 'numeric',
-        hour: '2-digit', minute: '2-digit'
-      }) 
+        hour: '2-digit', minute: '2-digit',
+      })
     : 'Sin asignar';
 
   const InfoRow = ({ icon, label, value, colorOverride }) => {
@@ -568,9 +419,6 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
     );
   };
 
-  // Botón de completar: texto y estilo según estado de descripción
-  const completeButtonBlocked = !taskHasDescription && task.state !== '1_done';
-
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={closeModal}>
       <View style={styles.overlay}>
@@ -585,12 +433,9 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
           />
         )}
         <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={closeModal} />
-        
+
         <Animated.View
-          style={[
-            styles.modalContainer,
-            { transform: [{ translateY: slideAnim }, { translateY: panY }] },
-          ]}
+          style={[styles.modalContainer, { transform: [{ translateY: slideAnim }, { translateY: panY }] }]}
         >
           <View style={styles.dragHeader} {...panResponder.panHandlers}>
             <View style={styles.handle} />
@@ -605,25 +450,35 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            
+            {/* ── Badges de estado y prioridad ── */}
             <View style={styles.headerRow}>
               <View style={[styles.statusBadge, { backgroundColor: statusInfo.color }]}>
                 <Feather name={statusInfo.icon} size={14} color="#fff" />
                 <Text style={styles.statusText}>{statusInfo.label}</Text>
               </View>
-
               <View style={[styles.priorityBadge, { borderColor: priorityInfo.color }]}>
                 <Feather name={priorityInfo.icon} size={14} color={priorityInfo.color} />
-                <Text style={[styles.priorityText, { color: priorityInfo.color }]}>
-                  {priorityInfo.label}
-                </Text>
+                <Text style={[styles.priorityText, { color: priorityInfo.color }]}>{priorityInfo.label}</Text>
               </View>
             </View>
 
+            {/* ── Banner de tarea histórica ── */}
+            {isHistorical && (
+              <View style={styles.historicalBanner}>
+                <Feather name="archive" size={18} color="#92400E" style={{ marginTop: 1 }} />
+                <View style={styles.historicalBannerText}>
+                  <Text style={styles.historicalBannerTitle}>Tarea de un periodo anterior</Text>
+                  <Text style={styles.historicalBannerSubtitle}>
+                    Solo puedes consultarla. Para completarla, gestionar encuestas o reprogramarla necesitas conexión para que se cargue en el periodo activo.
+                  </Text>
+                </View>
+              </View>
+            )}
+
+            {/* ── Título + clip adjuntos ── */}
             <View style={styles.titleRow}>
               <Text style={styles.title}>{task.display_name || task.name}</Text>
-              
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.attachmentsIconButton}
                 onPress={() => setShowAttachmentsModal(true)}
                 activeOpacity={0.7}
@@ -636,23 +491,17 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
                 )}
               </TouchableOpacity>
             </View>
-            
+
             {associatedLead && (
-              <TouchableOpacity 
-                style={styles.leadTag}
-                onPress={() => setShowLeadModal(true)}
-                activeOpacity={0.7}
-              >
+              <TouchableOpacity style={styles.leadTag} onPress={() => setShowLeadModal(true)} activeOpacity={0.7}>
                 <View style={styles.leadTagLeft}>
                   <Feather name="briefcase" size={14} color="#3B82F6" />
-                  <Text style={styles.leadTagText}>
-                    Oportunidad: {associatedLead.name}
-                  </Text>
+                  <Text style={styles.leadTagText}>Oportunidad: {associatedLead.name}</Text>
                 </View>
                 <Feather name="external-link" size={14} color="#3B82F6" />
               </TouchableOpacity>
             )}
-            
+
             {taskTags.length > 0 && (
               <View style={styles.tagsContainer}>
                 {taskTags.map((tag) => (
@@ -664,20 +513,14 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
               </View>
             )}
 
-            {/* ── Aviso si falta descripción ── */}
-            {!taskHasDescription && task.state !== '1_done' && (
-              <TouchableOpacity
-                style={styles.missingDescriptionBanner}
-                onPress={handleStartEditDescription}
-                activeOpacity={0.8}
-              >
+            {/* ── Aviso de descripción faltante (solo si no es histórica) ── */}
+            {!isHistorical && !taskHasDescription && task.state !== '1_done' && (
+              <TouchableOpacity style={styles.missingDescriptionBanner} onPress={handleStartEditDescription} activeOpacity={0.8}>
                 <View style={styles.missingDescriptionLeft}>
                   <Feather name="alert-triangle" size={16} color="#B45309" />
                   <View style={styles.missingDescriptionTextBlock}>
                     <Text style={styles.missingDescriptionTitle}>Descripción requerida</Text>
-                    <Text style={styles.missingDescriptionSubtitle}>
-                      Odoo no permitirá completar esta tarea hasta que tenga descripción.
-                    </Text>
+                    <Text style={styles.missingDescriptionSubtitle}>Odoo no permitirá completar esta tarea hasta que tenga descripción.</Text>
                   </View>
                 </View>
                 <View style={styles.missingDescriptionAction}>
@@ -687,46 +530,39 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
               </TouchableOpacity>
             )}
 
+            {/* ── Encuestas ── */}
             {loadingSurveys ? (
               <ActivityIndicator style={{ marginVertical: 20 }} size="small" color="#64c27b" />
             ) : hasSurveys && (
               <View style={styles.surveysSection}>
                 <View style={styles.sectionHeader}>
                   <Text style={styles.sectionTitle}>ENCUESTAS ASIGNADAS</Text>
-                  <View style={[
-                    styles.counterBadge, 
-                    allSurveysDone ? styles.counterBadgeDone : styles.counterBadgePending
-                  ]}>
-                    <Text style={[
-                      styles.counterText,
-                      allSurveysDone ? styles.counterTextDone : styles.counterTextPending
-                    ]}>
+                  <View style={[styles.counterBadge, allSurveysDone ? styles.counterBadgeDone : styles.counterBadgePending]}>
+                    <Text style={[styles.counterText, allSurveysDone ? styles.counterTextDone : styles.counterTextPending]}>
                       {completedSurveys}/{totalSurveys} Completadas
                     </Text>
                   </View>
                 </View>
 
-                <ScrollView 
-                  horizontal 
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.surveyListContent}
-                >
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.surveyListContent}>
                   {taskSurveys.map((survey, index) => (
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       key={survey.relation_id || `${survey.id}-${index}`}
                       style={[
                         styles.surveyCard,
-                        survey.isCompleted ? styles.surveyCardDone : styles.surveyCardPending
+                        survey.isCompleted ? styles.surveyCardDone : styles.surveyCardPending,
+                        isHistorical && styles.surveyCardDisabled,
                       ]}
-                      onPress={() => handleOpenSurvey(survey)}
+                      onPress={isHistorical ? undefined : () => handleOpenSurvey(survey)}
+                      activeOpacity={isHistorical ? 1 : 0.7}
                     >
                       <View style={styles.surveyCardTop}>
-                        <Feather 
-                          name={survey.isCompleted ? "check-circle" : "clipboard"} 
-                          size={24} 
-                          color={survey.isCompleted ? "#10B981" : "#F59E0B"} 
+                        <Feather
+                          name={isHistorical ? 'lock' : (survey.isCompleted ? 'check-circle' : 'clipboard')}
+                          size={24}
+                          color={isHistorical ? '#9CA3AF' : (survey.isCompleted ? '#10B981' : '#F59E0B')}
                         />
-                        {survey.isCompleted && (
+                        {survey.isCompleted && !isHistorical && (
                           <View style={styles.editBadge}>
                             <Feather name="edit-2" size={10} color="#15803d" />
                             <Text style={styles.editBadgeText}>Editar</Text>
@@ -734,37 +570,29 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
                         )}
                       </View>
                       <Text style={styles.surveyTitle} numberOfLines={2}>{survey.title}</Text>
-                      <Text style={styles.surveyStatusText}>
-                        {survey.isCompleted ? "Completada" : "Pendiente"}
+                      <Text style={[styles.surveyStatusText, isHistorical && { color: '#9CA3AF' }]}>
+                        {isHistorical ? 'No disponible' : (survey.isCompleted ? 'Completada' : 'Pendiente')}
                       </Text>
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
               </View>
             )}
-            
+
             <View style={styles.divider} />
 
+            {/* ── Datos de la tarea ── */}
             <Text style={styles.sectionTitle}>Datos de la Tarea</Text>
-            <InfoRow 
-              icon="user" 
-              label="Cliente" 
-              value={Array.isArray(task.partner_id) ? task.partner_id[1] : '-'} 
-            />
-            <InfoRow 
-              icon="briefcase" 
-              label="Proyecto" 
-              value={Array.isArray(task.project_id) ? task.project_id[1] : '-'} 
-            />
+            <InfoRow icon="user"     label="Cliente"  value={Array.isArray(task.partner_id) ? task.partner_id[1] : '-'} />
+            <InfoRow icon="briefcase" label="Proyecto" value={Array.isArray(task.project_id) ? task.project_id[1] : '-'} />
 
             <View style={styles.divider} />
+
+            {/* ── Planificación ── */}
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Planificación</Text>
-              {!reprogramming && task.state !== '1_done' && (
-                <TouchableOpacity 
-                  style={styles.reprogramButton}
-                  onPress={() => setReprogramming(true)}
-                >
+              {!reprogramming && task.state !== '1_done' && !isHistorical && (
+                <TouchableOpacity style={styles.reprogramButton} onPress={() => setReprogramming(true)}>
                   <Feather name="edit-2" size={16} color="#64c27b" />
                   <Text style={styles.reprogramButtonText}>Reprogramar</Text>
                 </TouchableOpacity>
@@ -774,25 +602,18 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
             {reprogramming ? (
               <View style={styles.reprogramContainer}>
                 <Text style={styles.reprogramTitle}>Selecciona nueva fecha y hora</Text>
-                
                 <View style={styles.rangeInfoContainer}>
                   <Feather name="info" size={14} color="#6B7280" />
                   <Text style={styles.rangeInfoText}>
-                    Rango permitido: {minDate.toLocaleDateString('es-ES', {day: '2-digit', month:'2-digit'})} al {maxDate.toLocaleDateString('es-ES', {day: '2-digit', month:'2-digit'})}
+                    Rango permitido: {minDate.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })} al {maxDate.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })}
                   </Text>
                 </View>
-                
-                <TouchableOpacity 
-                  style={styles.datePickerButton} 
-                  onPress={() => setShowPicker(true)}
-                >
+                <TouchableOpacity style={styles.datePickerButton} onPress={() => setShowPicker(true)}>
                   <View style={styles.datePickerLeft}>
                     <Feather name="calendar" size={20} color="#64c27b" />
                     <View style={styles.datePickerTextContainer}>
                       <Text style={styles.datePickerDate}>
-                        {newDate.toLocaleDateString('es-ES', { 
-                          weekday: 'long', day: '2-digit', month: 'long', year: 'numeric'
-                        })}
+                        {newDate.toLocaleDateString('es-ES', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
                       </Text>
                       <Text style={styles.datePickerTime}>
                         {newDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
@@ -801,8 +622,7 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
                   </View>
                   <Feather name="chevron-down" size={20} color="#9CA3AF" />
                 </TouchableOpacity>
-
-                <SimpleDateTimePicker 
+                <SimpleDateTimePicker
                   visible={showPicker}
                   onClose={() => setShowPicker(false)}
                   selectedDate={newDate}
@@ -811,11 +631,8 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
                   maxDate={maxDate}
                   mode="datetime"
                 />
-                  
                 <View style={styles.reasonField}>
-                  <Text style={styles.reasonLabel}>
-                    Razón de la reprogramación <Text style={styles.required}>*</Text>
-                  </Text>
+                  <Text style={styles.reasonLabel}>Razón de la reprogramación <Text style={styles.required}>*</Text></Text>
                   <TextInput
                     style={styles.reasonInput}
                     value={reason}
@@ -828,18 +645,11 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
                     maxLength={500}
                   />
                 </View>
-
                 <View style={styles.reprogramActions}>
-                  <TouchableOpacity 
-                    style={[styles.actionButton, styles.actionButtonCancel]} 
-                    onPress={() => setReprogramming(false)}
-                  >
+                  <TouchableOpacity style={[styles.actionButton, styles.actionButtonCancel]} onPress={() => setReprogramming(false)}>
                     <Text style={styles.actionButtonCancelText}>Cancelar</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity 
-                    style={[styles.actionButton, styles.actionButtonConfirm]} 
-                    onPress={handleReprogram}
-                  >
+                  <TouchableOpacity style={[styles.actionButton, styles.actionButtonConfirm]} onPress={handleReprogram}>
                     <Feather name="check" size={16} color="#fff" />
                     <Text style={styles.actionButtonConfirmText}>Confirmar</Text>
                   </TouchableOpacity>
@@ -847,23 +657,17 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
               </View>
             ) : (
               <>
-                <InfoRow 
-                  icon="calendar" 
-                  label="Fecha de Ejecución" 
-                  value={displayDeadline} 
-                />
-                <InfoRow 
-                  icon="flag" 
+                <InfoRow icon="calendar" label="Fecha de Ejecución" value={displayDeadline} />
+                <InfoRow
+                  icon="flag"
                   label="Fin del Periodo"
-                  value={maxDate.toLocaleDateString('es-ES', {
-                    day: '2-digit', month: 'long', year: 'numeric'
-                  })}
+                  value={maxDate.toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' })}
                   colorOverride="#F59E0B"
                 />
               </>
             )}
 
-            {/* ── Sección Descripción (siempre visible, editable) ─────────── */}
+            {/* ── Descripción ── */}
             <View style={styles.divider} />
             <View
               style={styles.sectionHeader}
@@ -871,7 +675,7 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
             >
               <View style={styles.descriptionTitleRow}>
                 <Text style={styles.sectionTitle}>Descripción</Text>
-                {!taskHasDescription && (
+                {!taskHasDescription && !isHistorical && (
                   <View style={styles.descriptionMissingBadge}>
                     <Feather name="alert-circle" size={11} color="#EF4444" />
                     <Text style={styles.descriptionMissingBadgeText}>Falta</Text>
@@ -879,27 +683,22 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
                 )}
               </View>
 
-              {task.state !== '1_done' && !editingDescription && (
-                <TouchableOpacity
-                  style={styles.editDescriptionButton}
-                  onPress={handleStartEditDescription}
-                >
+              {/* Botón editar descripción — oculto en históricas */}
+              {task.state !== '1_done' && !editingDescription && !isHistorical && (
+                <TouchableOpacity style={styles.editDescriptionButton} onPress={handleStartEditDescription}>
                   <Feather name="edit-3" size={15} color="#64c27b" />
-                  <Text style={styles.editDescriptionButtonText}>
-                    {taskHasDescription ? 'Editar' : 'Añadir'}
-                  </Text>
+                  <Text style={styles.editDescriptionButtonText}>{taskHasDescription ? 'Editar' : 'Añadir'}</Text>
                 </TouchableOpacity>
               )}
             </View>
 
             {editingDescription ? (
-              // ── Editor de descripción ──────────────────────────────────────
               <View style={styles.descriptionEditorContainer}>
                 <TextInput
                   style={styles.descriptionEditor}
                   value={descriptionDraft}
                   onChangeText={setDescriptionDraft}
-                  placeholder="Describe el objetivo de esta tarea, qué debe hacerse..."
+                  placeholder="Describe el objetivo de esta tarea..."
                   placeholderTextColor="#9CA3AF"
                   multiline
                   numberOfLines={6}
@@ -908,23 +707,13 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
                   maxLength={2000}
                 />
                 <View style={styles.descriptionEditorFooter}>
-                  <Text style={styles.descriptionCharCount}>
-                    {descriptionDraft.length}/2000
-                  </Text>
+                  <Text style={styles.descriptionCharCount}>{descriptionDraft.length}/2000</Text>
                   <View style={styles.descriptionEditorActions}>
-                    <TouchableOpacity
-                      style={[styles.descEditorBtn, styles.descEditorBtnCancel]}
-                      onPress={handleCancelEditDescription}
-                      disabled={savingDescription}
-                    >
+                    <TouchableOpacity style={[styles.descEditorBtn, styles.descEditorBtnCancel]} onPress={handleCancelEditDescription} disabled={savingDescription}>
                       <Text style={styles.descEditorBtnCancelText}>Cancelar</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={[
-                        styles.descEditorBtn,
-                        styles.descEditorBtnSave,
-                        !descriptionDraft.trim() && styles.descEditorBtnDisabled,
-                      ]}
+                      style={[styles.descEditorBtn, styles.descEditorBtnSave, !descriptionDraft.trim() && styles.descEditorBtnDisabled]}
                       onPress={handleSaveDescription}
                       disabled={savingDescription || !descriptionDraft.trim()}
                     >
@@ -939,67 +728,65 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
                     </TouchableOpacity>
                   </View>
                 </View>
-
                 {!descriptionDraft.trim() && (
                   <View style={styles.descriptionEditorWarning}>
                     <Feather name="info" size={13} color="#B45309" />
-                    <Text style={styles.descriptionEditorWarningText}>
-                      La descripción es obligatoria para poder completar la tarea en Odoo.
-                    </Text>
+                    <Text style={styles.descriptionEditorWarningText}>La descripción es obligatoria para poder completar la tarea en Odoo.</Text>
                   </View>
                 )}
               </View>
             ) : taskHasDescription ? (
-              // ── Descripción en modo lectura ────────────────────────────────
               <View style={styles.descriptionBox}>
                 <Text style={styles.descriptionText}>{cleanDescription}</Text>
               </View>
-            ) : (
-              // ── Sin descripción ────────────────────────────────────────────
-              <TouchableOpacity
-                style={styles.descriptionEmptyBox}
-                onPress={handleStartEditDescription}
-                activeOpacity={0.7}
-              >
+            ) : !isHistorical ? (
+              <TouchableOpacity style={styles.descriptionEmptyBox} onPress={handleStartEditDescription} activeOpacity={0.7}>
                 <Feather name="file-text" size={20} color="#D1D5DB" />
                 <Text style={styles.descriptionEmptyText}>Sin descripción</Text>
-                <Text style={styles.descriptionEmptySubtext}>
-                  Toca para añadirla (necesaria para completar la tarea)
-                </Text>
+                <Text style={styles.descriptionEmptySubtext}>Toca para añadirla (necesaria para completar la tarea)</Text>
               </TouchableOpacity>
+            ) : (
+              <View style={styles.descriptionEmptyBox}>
+                <Feather name="file-text" size={20} color="#D1D5DB" />
+                <Text style={styles.descriptionEmptyText}>Sin descripción</Text>
+              </View>
             )}
 
+            {/* ── Botón principal de acción ── */}
             {task.state !== '1_done' && (
               <>
                 <View style={styles.divider} />
-
-                {/* Botón principal de completar — con indicador si falta descripción */}
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={[
                     styles.completeTaskButton,
-                    completeButtonBlocked             && styles.completeTaskButtonBlocked,
-                    !completeButtonBlocked && (hasSurveys && allSurveysDone) && styles.completeTaskButtonReady,
-                    !completeButtonBlocked && !hasSurveys && !isUserOwnTask  && styles.completeTaskButtonReady,
-                    !completeButtonBlocked && (hasSurveys && !allSurveysDone)  && styles.completeTaskButtonWarning,
-                    !completeButtonBlocked && !hasSurveys && isUserOwnTask   && styles.completeTaskButtonOwn,
+                    isHistorical                                        && styles.completeTaskButtonHistorical,
+                    !isHistorical && completeButtonBlocked              && styles.completeTaskButtonBlocked,
+                    !isHistorical && !completeButtonBlocked && hasSurveys && allSurveysDone  && styles.completeTaskButtonReady,
+                    !isHistorical && !completeButtonBlocked && !hasSurveys && !isUserOwnTask && styles.completeTaskButtonReady,
+                    !isHistorical && !completeButtonBlocked && hasSurveys && !allSurveysDone && styles.completeTaskButtonWarning,
+                    !isHistorical && !completeButtonBlocked && !hasSurveys && isUserOwnTask  && styles.completeTaskButtonOwn,
                   ]}
-                  onPress={handleTaskAction}
+                  onPress={isHistorical ? undefined : handleTaskAction}
+                  activeOpacity={isHistorical ? 1 : 0.85}
                 >
-                  <Feather 
+                  <Feather
                     name={
-                      completeButtonBlocked           ? 'alert-circle' :
-                      hasSurveys && !allSurveysDone   ? 'alert-circle' :
-                      !hasSurveys && isUserOwnTask    ? 'edit' :
+                      isHistorical                          ? 'lock'          :
+                      completeButtonBlocked                 ? 'alert-circle'  :
+                      hasSurveys && !allSurveysDone         ? 'alert-circle'  :
+                      !hasSurveys && isUserOwnTask          ? 'edit'          :
                       'check-circle'
-                    } 
-                    size={20} 
-                    color="#fff" 
+                    }
+                    size={20}
+                    color="#fff"
                   />
                   <Text style={styles.completeTaskButtonText}>
-                    {completeButtonBlocked
+                    {isHistorical
+                      ? 'No disponible en periodos anteriores'
+                      : completeButtonBlocked
                       ? 'Añadir descripción para completar'
-                      : hasSurveys && !allSurveysDone 
-                      ? `Pendientes: ${totalSurveys - completedSurveys} encuestas` 
+                      : hasSurveys && !allSurveysDone
+                      ? `Pendientes: ${totalSurveys - completedSurveys} encuestas`
                       : !hasSurveys && isUserOwnTask
                       ? 'Cambiar Estado'
                       : 'Completar Tarea'}
@@ -1028,11 +815,59 @@ export default function TaskDetailModal({ visible, task, allTasks, onClose, onTa
 }
 
 const styles = StyleSheet.create({
+  overlay:  { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+  backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  modalContainer: {
+    height: MODAL_HEIGHT, backgroundColor: '#fff',
+    borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden',
+    shadowColor: '#000', shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.25, shadowRadius: 4, elevation: 5, paddingBottom: 30,
+  },
+  dragHeader: {
+    width: '100%', height: 40, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f3f4f6',
+  },
+  handle: { width: 48, height: 5, backgroundColor: '#E5E7EB', borderRadius: 3 },
+  scrollContainer: { flex: 1 },
+  scrollContent:   { padding: 24, paddingBottom: 40 },
+
+  headerRow:    { flexDirection: 'row', gap: 12, marginBottom: 16 },
+  statusBadge:  { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, gap: 6 },
+  statusText:   { fontSize: 12, fontWeight: '700', color: '#fff' },
+  priorityBadge:{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, borderWidth: 1.5, backgroundColor: '#fff', gap: 6 },
+  priorityText: { fontSize: 12, fontWeight: '700' },
+
+  // ── Banner histórico ────────────────────────────────────────────────────────
+  historicalBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+  },
+  historicalBannerText: { flex: 1 },
+  historicalBannerTitle: {
+    fontSize: 13, fontWeight: '700', color: '#92400E', marginBottom: 4,
+  },
+  historicalBannerSubtitle: {
+    fontSize: 12, color: '#B45309', lineHeight: 17,
+  },
+
+  titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 },
+  title:    { fontSize: 22, fontWeight: '700', color: '#111827', marginBottom: 8, lineHeight: 28, flex: 1 },
+
+  attachmentsIconButton: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: '#f0fdf4', alignItems: 'center', justifyContent: 'center', marginLeft: 12,
+  },
   attachmentsBadge: {
     position: 'absolute', top: -4, right: -4,
     backgroundColor: '#EF4444', borderRadius: 10,
-    minWidth: 20, height: 20,
-    alignItems: 'center', justifyContent: 'center',
+    minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center',
     paddingHorizontal: 4, borderWidth: 2, borderColor: '#fff',
   },
   attachmentsBadgeText: { fontSize: 11, fontWeight: '700', color: '#fff' },
@@ -1045,46 +880,6 @@ const styles = StyleSheet.create({
   leadTagLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 8 },
   leadTagText: { fontSize: 13, fontWeight: '600', color: '#3B82F6', flex: 1 },
 
-  titleRow: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'flex-start', marginBottom: 8,
-  },
-  attachmentsIconButton: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: '#f0fdf4', alignItems: 'center', justifyContent: 'center', marginLeft: 12,
-  },
-
-  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0, 0, 0, 0.4)' },
-  backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  modalContainer: { 
-    height: MODAL_HEIGHT, backgroundColor: '#fff', 
-    borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden',
-    shadowColor: "#000", shadowOffset: { width: 0, height: -2 }, 
-    shadowOpacity: 0.25, shadowRadius: 4, elevation: 5, paddingBottom: 30,
-  },
-  dragHeader: { 
-    width: '100%', height: 40, alignItems: 'center', justifyContent: 'center', 
-    backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f3f4f6' 
-  },
-  handle: { width: 48, height: 5, backgroundColor: '#E5E7EB', borderRadius: 3 },
-  scrollContainer: { flex: 1 },
-  scrollContent: { padding: 24, paddingBottom: 40 },
-
-  headerRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
-  statusBadge: { 
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, gap: 6,
-  },
-  statusText: { fontSize: 12, fontWeight: '700', color: '#fff' },
-  priorityBadge: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12,
-    borderWidth: 1.5, backgroundColor: '#fff', gap: 6,
-  },
-  priorityText: { fontSize: 12, fontWeight: '700' },
-
-  title: { fontSize: 22, fontWeight: '700', color: '#111827', marginBottom: 8, lineHeight: 28, flex: 1 },
-
   tagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
   tagChip: {
     flexDirection: 'row', alignItems: 'center',
@@ -1093,254 +888,108 @@ const styles = StyleSheet.create({
   },
   tagText: { fontSize: 12, fontWeight: '600', color: '#15803d' },
 
-  divider: { height: 1, backgroundColor: '#F3F4F6', marginVertical: 20 },
-  sectionHeader: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', marginBottom: 16,
-  },
-  sectionTitle: { 
-    fontSize: 12, fontWeight: '700', color: '#6B7280', 
-    textTransform: 'uppercase', letterSpacing: 0.5 
-  },
-
-  // ── Banner descripción faltante ──────────────────────────────────────────
   missingDescriptionBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#FFFBEB',
-    borderWidth: 1,
-    borderColor: '#FCD34D',
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 16,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: '#FFFBEB', borderWidth: 1, borderColor: '#FCD34D',
+    borderRadius: 10, padding: 12, marginBottom: 16,
   },
-  missingDescriptionLeft: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    flex: 1,
-    gap: 10,
+  missingDescriptionLeft:     { flexDirection: 'row', alignItems: 'flex-start', flex: 1, gap: 10 },
+  missingDescriptionTextBlock:{ flex: 1 },
+  missingDescriptionTitle:    { fontSize: 13, fontWeight: '700', color: '#92400E', marginBottom: 2 },
+  missingDescriptionSubtitle: { fontSize: 12, color: '#B45309', lineHeight: 17 },
+  missingDescriptionAction:   {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#FEF3C7', paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: 8, gap: 4, marginLeft: 10,
   },
-  missingDescriptionTextBlock: { flex: 1 },
-  missingDescriptionTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#92400E',
-    marginBottom: 2,
-  },
-  missingDescriptionSubtitle: {
-    fontSize: 12,
-    color: '#B45309',
-    lineHeight: 17,
-  },
-  missingDescriptionAction: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    gap: 4,
-    marginLeft: 10,
-  },
-  missingDescriptionActionText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#92400E',
-  },
+  missingDescriptionActionText: { fontSize: 12, fontWeight: '700', color: '#92400E' },
 
-  // ── Descripción ──────────────────────────────────────────────────────────
-  descriptionTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  descriptionMissingBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEF2F2',
-    borderWidth: 1,
-    borderColor: '#FECACA',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 8,
-    gap: 3,
-  },
-  descriptionMissingBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#EF4444',
-  },
-  editDescriptionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    backgroundColor: '#f0fdf4',
-    borderRadius: 6,
-  },
-  editDescriptionButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#64c27b',
-  },
+  divider:       { height: 1, backgroundColor: '#F3F4F6', marginVertical: 20 },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  sectionTitle:  { fontSize: 12, fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.5 },
 
-  descriptionBox: { 
-    backgroundColor: '#F9FAFB', padding: 16, borderRadius: 8, 
-    borderWidth: 1, borderColor: '#E5E7EB' 
+  surveysSection:     { marginTop: 10 },
+  counterBadge:       { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
+  counterBadgePending:{ backgroundColor: '#FEF3C7' },
+  counterBadgeDone:   { backgroundColor: '#D1FAE5' },
+  counterText:        { fontSize: 11, fontWeight: '700' },
+  counterTextPending: { color: '#B45309' },
+  counterTextDone:    { color: '#047857' },
+  surveyListContent:  { paddingRight: 20 },
+  surveyCard: {
+    width: 140, height: 110, borderRadius: 12, padding: 12,
+    borderWidth: 1, justifyContent: 'space-between',
+    backgroundColor: '#fff', marginRight: 12,
   },
-  descriptionText: { fontSize: 14, color: '#374151', lineHeight: 20 },
+  surveyCardPending:  { borderColor: '#FCD34D', backgroundColor: '#FFFBEB' },
+  surveyCardDone:     { borderColor: '#6EE7B7', backgroundColor: '#ECFDF5' },
+  surveyCardDisabled: { opacity: 0.45 },
+  surveyCardTop:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  surveyTitle:        { fontSize: 13, fontWeight: '600', color: '#374151', marginTop: 8 },
+  surveyStatusText:   { fontSize: 10, fontWeight: '500', color: '#6B7280', marginTop: 4 },
+  editBadge: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff',
+    paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4,
+  },
+  editBadgeText: { fontSize: 9, color: '#15803d', marginLeft: 2, fontWeight: 'bold' },
 
-  descriptionEmptyBox: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F9FAFB',
-    padding: 24,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderStyle: 'dashed',
-    gap: 6,
-  },
-  descriptionEmptyText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#9CA3AF',
-  },
-  descriptionEmptySubtext: {
-    fontSize: 12,
-    color: '#D1D5DB',
-    textAlign: 'center',
-  },
-
-  descriptionEditorContainer: {
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-    borderWidth: 1.5,
-    borderColor: '#64c27b',
-    overflow: 'hidden',
-  },
-  descriptionEditor: {
-    padding: 14,
-    fontSize: 14,
-    color: '#111827',
-    minHeight: 120,
-    textAlignVertical: 'top',
-    backgroundColor: '#fff',
-  },
-  descriptionEditorFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: '#F9FAFB',
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
-  },
-  descriptionCharCount: {
-    fontSize: 11,
-    color: '#9CA3AF',
-  },
-  descriptionEditorActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  descEditorBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 6,
-    gap: 5,
-  },
-  descEditorBtnCancel: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-  },
-  descEditorBtnCancelText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  descEditorBtnSave: {
-    backgroundColor: '#64c27b',
-  },
-  descEditorBtnDisabled: {
-    backgroundColor: '#D1D5DB',
-  },
-  descEditorBtnSaveText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#fff',
-  },
-  descriptionEditorWarning: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: '#FFFBEB',
-    padding: 10,
-    gap: 6,
-  },
-  descriptionEditorWarningText: {
-    flex: 1,
-    fontSize: 12,
-    color: '#B45309',
-    lineHeight: 17,
-  },
-
-  reprogramButton: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 12, paddingVertical: 6,
-    backgroundColor: '#f0fdf4', borderRadius: 6,
-  },
-  reprogramButtonText: { fontSize: 13, fontWeight: '600', color: '#64c27b' },
-
-  infoRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
-  iconContainer: { 
-    width: 40, height: 40, borderRadius: 20, backgroundColor: '#f0fdf4', 
-    alignItems: 'center', justifyContent: 'center', marginRight: 16 
+  infoRow:     { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  iconContainer: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: '#f0fdf4',
+    alignItems: 'center', justifyContent: 'center', marginRight: 16,
   },
   infoContent: { flex: 1 },
-  infoLabel: { 
-    fontSize: 11, color: '#9CA3AF', marginBottom: 2, 
-    fontWeight: '600', textTransform: 'uppercase' 
-  },
-  infoValue: { fontSize: 15, color: '#1F2937', fontWeight: '500', lineHeight: 20 },
+  infoLabel:   { fontSize: 11, color: '#9CA3AF', marginBottom: 2, fontWeight: '600', textTransform: 'uppercase' },
+  infoValue:   { fontSize: 15, color: '#1F2937', fontWeight: '500', lineHeight: 20 },
 
-  reprogramContainer: {
-    backgroundColor: '#F9FAFB', padding: 16, borderRadius: 12,
-    borderWidth: 1, borderColor: '#E5E7EB',
-  },
-  reprogramTitle: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 12 },
-  rangeInfoContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 6 },
-  rangeInfoText: { fontSize: 12, color: '#6B7280', fontStyle: 'italic' },
-  datePickerButton: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: '#fff', padding: 14, borderRadius: 8,
-    borderWidth: 1, borderColor: '#D1D5DB', marginBottom: 16,
-  },
-  datePickerLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  reprogramButton:     { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#f0fdf4', borderRadius: 6 },
+  reprogramButtonText: { fontSize: 13, fontWeight: '600', color: '#64c27b' },
+
+  reprogramContainer:   { backgroundColor: '#F9FAFB', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' },
+  reprogramTitle:       { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 12 },
+  rangeInfoContainer:   { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 6 },
+  rangeInfoText:        { fontSize: 12, color: '#6B7280', fontStyle: 'italic' },
+  datePickerButton:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', padding: 14, borderRadius: 8, borderWidth: 1, borderColor: '#D1D5DB', marginBottom: 16 },
+  datePickerLeft:       { flexDirection: 'row', alignItems: 'center', flex: 1 },
   datePickerTextContainer: { marginLeft: 12 },
-  datePickerDate: { fontSize: 15, color: '#111827', fontWeight: '500', textTransform: 'capitalize' },
-  datePickerTime: { fontSize: 13, color: '#6B7280', marginTop: 2 },
-  reasonField: { marginTop: 0 },
-  reasonLabel: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
-  required: { color: '#EF4444' },
-  reasonInput: {
-    backgroundColor: '#fff', borderWidth: 1, borderColor: '#D1D5DB',
-    borderRadius: 8, padding: 12, fontSize: 14, color: '#111827', height: 80,
-  },
-  reprogramActions: { flexDirection: 'row', gap: 12, marginTop: 16 },
-  actionButton: {
-    flex: 1, flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'center', padding: 12, borderRadius: 8, gap: 6,
-  },
-  actionButtonCancel: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#D1D5DB' },
-  actionButtonCancelText: { fontSize: 14, fontWeight: '600', color: '#374151' },
-  actionButtonConfirm: { backgroundColor: '#64c27b' },
+  datePickerDate:       { fontSize: 15, color: '#111827', fontWeight: '500', textTransform: 'capitalize' },
+  datePickerTime:       { fontSize: 13, color: '#6B7280', marginTop: 2 },
+  reasonField:          { marginTop: 0 },
+  reasonLabel:          { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
+  required:             { color: '#EF4444' },
+  reasonInput:          { backgroundColor: '#fff', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 8, padding: 12, fontSize: 14, color: '#111827', height: 80 },
+  reprogramActions:     { flexDirection: 'row', gap: 12, marginTop: 16 },
+  actionButton:         { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 6 },
+  actionButtonCancel:   { backgroundColor: '#fff', borderWidth: 1, borderColor: '#D1D5DB' },
+  actionButtonCancelText:  { fontSize: 14, fontWeight: '600', color: '#374151' },
+  actionButtonConfirm:     { backgroundColor: '#64c27b' },
   actionButtonConfirmText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+
+  descriptionTitleRow:     { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  descriptionMissingBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, gap: 3 },
+  descriptionMissingBadgeText: { fontSize: 10, fontWeight: '700', color: '#EF4444' },
+  editDescriptionButton:   { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 5, backgroundColor: '#f0fdf4', borderRadius: 6 },
+  editDescriptionButtonText:{ fontSize: 13, fontWeight: '600', color: '#64c27b' },
+
+  descriptionBox:          { backgroundColor: '#F9FAFB', padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB' },
+  descriptionText:         { fontSize: 14, color: '#374151', lineHeight: 20 },
+  descriptionEmptyBox:     { alignItems: 'center', justifyContent: 'center', backgroundColor: '#F9FAFB', padding: 24, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', borderStyle: 'dashed', gap: 6 },
+  descriptionEmptyText:    { fontSize: 14, fontWeight: '600', color: '#9CA3AF' },
+  descriptionEmptySubtext: { fontSize: 12, color: '#D1D5DB', textAlign: 'center' },
+
+  descriptionEditorContainer: { backgroundColor: '#F9FAFB', borderRadius: 8, borderWidth: 1.5, borderColor: '#64c27b', overflow: 'hidden' },
+  descriptionEditor:           { padding: 14, fontSize: 14, color: '#111827', minHeight: 120, textAlignVertical: 'top', backgroundColor: '#fff' },
+  descriptionEditorFooter:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F9FAFB', borderTopWidth: 1, borderTopColor: '#E5E7EB' },
+  descriptionCharCount:        { fontSize: 11, color: '#9CA3AF' },
+  descriptionEditorActions:    { flexDirection: 'row', gap: 8 },
+  descEditorBtn:               { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 6, gap: 5 },
+  descEditorBtnCancel:         { backgroundColor: '#fff', borderWidth: 1, borderColor: '#D1D5DB' },
+  descEditorBtnCancelText:     { fontSize: 13, fontWeight: '600', color: '#374151' },
+  descEditorBtnSave:           { backgroundColor: '#64c27b' },
+  descEditorBtnDisabled:       { backgroundColor: '#D1D5DB' },
+  descEditorBtnSaveText:       { fontSize: 13, fontWeight: '700', color: '#fff' },
+  descriptionEditorWarning:    { flexDirection: 'row', alignItems: 'flex-start', backgroundColor: '#FFFBEB', padding: 10, gap: 6 },
+  descriptionEditorWarningText:{ flex: 1, fontSize: 12, color: '#B45309', lineHeight: 17 },
 
   completeTaskButton: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
@@ -1349,35 +998,12 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15, shadowRadius: 4, elevation: 3,
   },
-  completeTaskButtonBlocked: { backgroundColor: '#F59E0B' },
-  completeTaskButtonWarning: { backgroundColor: '#F59E0B' },
-  completeTaskButtonReady: { backgroundColor: '#10B981' },
-  completeTaskButtonOwn: { backgroundColor: '#3B82F6' },
-  completeTaskButtonText: { fontSize: 16, fontWeight: '700', color: '#fff' },
+  completeTaskButtonHistorical: { backgroundColor: '#9CA3AF' },
+  completeTaskButtonBlocked:    { backgroundColor: '#F59E0B' },
+  completeTaskButtonWarning:    { backgroundColor: '#F59E0B' },
+  completeTaskButtonReady:      { backgroundColor: '#10B981' },
+  completeTaskButtonOwn:        { backgroundColor: '#3B82F6' },
+  completeTaskButtonText:       { fontSize: 16, fontWeight: '700', color: '#fff' },
 
   commentsSection: { minHeight: 300, maxHeight: 500 },
-
-  surveysSection: { marginTop: 10 },
-  counterBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
-  counterBadgePending: { backgroundColor: '#FEF3C7' },
-  counterBadgeDone: { backgroundColor: '#D1FAE5' },
-  counterText: { fontSize: 11, fontWeight: '700' },
-  counterTextPending: { color: '#B45309' },
-  counterTextDone: { color: '#047857' },
-  surveyListContent: { paddingRight: 20 },
-  surveyCard: {
-    width: 140, height: 110, borderRadius: 12, padding: 12,
-    borderWidth: 1, justifyContent: 'space-between',
-    backgroundColor: '#fff', marginRight: 12,
-  },
-  surveyCardPending: { borderColor: '#FCD34D', backgroundColor: '#FFFBEB' },
-  surveyCardDone:    { borderColor: '#6EE7B7', backgroundColor: '#ECFDF5' },
-  surveyCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  surveyTitle:  { fontSize: 13, fontWeight: '600', color: '#374151', marginTop: 8 },
-  surveyStatusText: { fontSize: 10, fontWeight: '500', color: '#6B7280', marginTop: 4 },
-  editBadge: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', 
-    paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4,
-  },
-  editBadgeText: { fontSize: 9, color: '#15803d', marginLeft: 2, fontWeight: 'bold' },
 });

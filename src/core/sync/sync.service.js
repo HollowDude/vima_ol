@@ -214,9 +214,11 @@ class SyncService {
       console.error(' Error limpiando caché de proyecto:', error);
     }
   }
-  async fetchAndCacheTasksForRange(fromDate, toDate) { return Tasks.fetchAndCacheTasksForRange(fromDate, toDate); }
-  async getExtendedTasks()                           { return Tasks.getExtendedTasks(); }
-  async cleanExpiredExtendedTasks()                  { return Tasks.cleanExpiredExtendedTasks(); }
+  async fetchAndCacheTasksForRange(from, to)  { return Tasks.fetchAndCacheTasksForRange(from, to); }
+  async getExtendedTasks()                    { return Tasks.getExtendedTasks(); }
+  async cleanExpiredExtendedTasks()           { return Tasks.cleanExpiredExtendedTasks(); }
+  async touchBatchForTask(taskId)             { return Tasks.touchBatchForTask(taskId); }
+  async updateExtendedTaskLocally(id, updates){ return Tasks.updateExtendedTaskLocally(id, updates); }
  
 }
 
