@@ -231,14 +231,12 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
       const result = await SyncService.getAllVisibleTasks();
       setAllTasks(result.tasks);
       setProjectId(result.projectId);
-
-      /**
-       * FIX — Bug 2: calcular los límites del proyecto a partir de los
-       * date_deadline REALES de las tareas, no de project.date_start.
-       *
-       * Esto evita que tareas del proyecto actual queden fuera del rango
-       * y se descarguen de nuevo como "extendidas" (causando el Bug 5).
-       */
+ 
+      // ✅ FIX – fuente autoritativa: campo 'date' del registro del proyecto
+      if (result.projectFinishDate) {
+        setProjectDateEnd(result.projectFinishDate);   // "YYYY-MM-DD"
+      }
+ 
       const taskDates = result.tasks
         .filter(t => t.date_deadline)
         .map(t => {
@@ -246,22 +244,28 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
           if (!s.endsWith('Z')) s += 'Z';
           return new Date(s);
         });
-
+ 
       if (taskDates.length > 0) {
         const minTs = Math.min(...taskDates.map(d => d.getTime()));
-        const maxTs = Math.max(...taskDates.map(d => d.getTime()));
         setProjectDateStart(getLocalDateString(new Date(minTs)));
-        setProjectDateEnd(getLocalDateString(new Date(maxTs)));
+ 
+        // Sólo usar el máximo de tareas como fin si el proyecto NO tiene
+        // fecha de fin configurada en Odoo
+        if (!result.projectFinishDate) {
+          const maxTs = Math.max(...taskDates.map(d => d.getTime()));
+          setProjectDateEnd(getLocalDateString(new Date(maxTs)));
+        }
       } else {
         // Sin tareas: usar date_start del proyecto como fallback
         const project = await SyncService.getMasterData('current_project');
         if (project?.date_start) {
           setProjectDateStart(project.date_start);
-          setProjectDateEnd(getLocalDateString(getEndOfMonthDate(project.date_start)));
+          if (!result.projectFinishDate) {
+            setProjectDateEnd(getLocalDateString(getEndOfMonthDate(project.date_start)));
+          }
         }
       }
-
-      // Tareas extendidas cacheadas de sesiones anteriores (aún vigentes)
+ 
       const cached = await SyncService.getExtendedTasks();
       setExtendedTasks(cached);
     } catch (e) {
@@ -366,30 +370,80 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
       setLoadingExtended(false);
     }
   };
+  const parseLocalDate = (dateStr) => {
+    if (!dateStr) return null;
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(y, m - 1, d); // Constructor con año/mes/día = hora local
+  };
 
   // ── Cargar días pasados ───────────────────────────────────────────────────────
   const handleLoadPastDays = async () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-
-    // Sin conexión: mostrar hasta el inicio del proyecto de un salto
-    if (!isOnline && projectDateStart) {
-      const projectStart = new Date(projectDateStart);
-      projectStart.setHours(0, 0, 0, 0);
-      const daysSinceStart = Math.ceil((today - projectStart) / (1000 * 60 * 60 * 24));
-
-      if (pastDays < daysSinceStart) {
-        const compensation = (daysSinceStart - pastDays) * DAY_WIDTH;
-        setPastDays(daysSinceStart);
+ 
+    const newPastDays     = pastDays + 7;
+    const newEarliestDate = new Date(today);
+    newEarliestDate.setDate(today.getDate() - newPastDays);
+ 
+    // ✅ FIX: parseLocalDate en lugar de new Date(string)
+    const projectStartDate = parseLocalDate(projectDateStart);
+ 
+    const needsExtended = projectStartDate && newEarliestDate < projectStartDate;
+ 
+    if (!needsExtended) {
+      const compensation = 7 * DAY_WIDTH;
+      setPastDays(newPastDays);
+      setTimeout(() => {
+        scrollViewRef.current?.scrollTo({ x: scrollXRef.current + compensation, animated: false });
+      }, 80);
+      return;
+    }
+ 
+    // ── OFFLINE ────────────────────────────────────────────────────────────
+    if (!isOnline) {
+      const daysFromStart = projectStartDate
+        ? Math.ceil((today - projectStartDate) / (1000 * 60 * 60 * 24))
+        : 0;
+ 
+      if (pastDays < daysFromStart) {
+        const compensation = (daysFromStart - pastDays) * DAY_WIDTH;
+        setPastDays(daysFromStart);
         setTimeout(() => {
-          scrollViewRef.current?.scrollTo({
-            x: scrollXRef.current + compensation,
-            animated: false,
-          });
+          scrollViewRef.current?.scrollTo({ x: scrollXRef.current + compensation, animated: false });
         }, 80);
         return;
       }
-      // Ya mostramos todo el proyecto hacia atrás — necesita red para más
+ 
+      const cached = await SyncService.getExtendedTasks();
+      if (cached.length > 0) {
+        const dates = [...allTasks, ...cached]
+          .filter(t => t.date_deadline)
+          .map(t => {
+            let s = t.date_deadline.replace(' ', 'T');
+            if (!s.endsWith('Z')) s += 'Z';
+            return getLocalDateString(new Date(s));
+          })
+          .sort();
+        const minCachedDate    = dates[0];
+        const currentStartDate = getLocalDateString(new Date(today.getTime() - pastDays * 86400000));
+ 
+        if (currentStartDate > minCachedDate) {
+          const compensation = 7 * DAY_WIDTH;
+          setPastDays(newPastDays);
+          setExtendedTasks(cached);
+          setTimeout(() => {
+            scrollViewRef.current?.scrollTo({ x: scrollXRef.current + compensation, animated: false });
+          }, 80);
+          return;
+        }
+        Alert.alert(
+          'Límite offline',
+          `Sin conexión puedes retroceder hasta el ${formatDateStr(minCachedDate)}.`,
+          [{ text: 'Entendido' }]
+        );
+        return;
+      }
+ 
       Alert.alert(
         'Sin conexión',
         'Necesitas conexión a internet para cargar tareas de periodos anteriores.',
@@ -397,30 +451,31 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
       );
       return;
     }
-
-    // Con conexión: lógica normal +7 con fetch si sale del proyecto
-    const newPastDays = pastDays + 7;
-    const newEarliestDate = new Date(today);
-    newEarliestDate.setDate(today.getDate() - newPastDays);
-
-    const needsExtended = projectDateStart && newEarliestDate < new Date(projectDateStart);
-
-    if (needsExtended) {
-      const prevEarliestMinus1 = new Date(today);
-      prevEarliestMinus1.setDate(today.getDate() - pastDays - 1);
-      const fromStr = getLocalDateString(newEarliestDate);
-      const toStr   = getLocalDateString(prevEarliestMinus1);
+ 
+    // ── ONLINE ─────────────────────────────────────────────────────────────
+    const dayBeforeProjectStart = projectStartDate
+      ? new Date(projectStartDate.getTime() - 86400000)
+      : new Date(today.getTime() - (pastDays + 1) * 86400000);
+ 
+    const prevEarliestMinus1 = new Date(today);
+    prevEarliestMinus1.setDate(today.getDate() - pastDays - 1);
+ 
+    const fetchToDate = prevEarliestMinus1 < dayBeforeProjectStart
+      ? prevEarliestMinus1
+      : dayBeforeProjectStart;
+ 
+    const fromStr = getLocalDateString(newEarliestDate);
+    const toStr   = getLocalDateString(fetchToDate);
+ 
+    if (fromStr <= toStr) {
       const canProceed = await fetchExtendedTasks(fromStr, toStr, 'past');
       if (!canProceed) return;
     }
-
+ 
     const compensation = 7 * DAY_WIDTH;
     setPastDays(newPastDays);
     setTimeout(() => {
-      scrollViewRef.current?.scrollTo({
-        x: scrollXRef.current + compensation,
-        animated: false,
-      });
+      scrollViewRef.current?.scrollTo({ x: scrollXRef.current + compensation, animated: false });
     }, 80);
   };
 
@@ -428,18 +483,60 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   const handleLoadFutureDays = async () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-
-    // Sin conexión: mostrar hasta el fin del proyecto de un salto
-    if (!isOnline && projectDateEnd) {
-      const projectEnd = new Date(projectDateEnd);
-      projectEnd.setHours(0, 0, 0, 0);
-      const daysToEnd = Math.ceil((projectEnd - today) / (1000 * 60 * 60 * 24));
-
+ 
+    const newFutureDays = futureDays + 7;
+    const newLatestDate = new Date(today);
+    newLatestDate.setDate(today.getDate() + newFutureDays);
+ 
+    // ✅ FIX: parseLocalDate en lugar de new Date(string)
+    const projectEndDate = parseLocalDate(projectDateEnd);
+ 
+    const needsExtended = projectEndDate && newLatestDate > projectEndDate;
+ 
+    if (!needsExtended) {
+      setFutureDays(newFutureDays);
+      return;
+    }
+ 
+    // ── OFFLINE ────────────────────────────────────────────────────────────
+    if (!isOnline) {
+      const daysToEnd = projectEndDate
+        ? Math.ceil((projectEndDate - today) / (1000 * 60 * 60 * 24))
+        : 0;
+ 
       if (futureDays < daysToEnd) {
+        // Todavía dentro del proyecto → expandir hasta el último día real
         setFutureDays(daysToEnd);
         return;
       }
-      // Ya mostramos todo el proyecto hacia adelante — necesita red para más
+ 
+      // Ya mostramos todo el proyecto. ¿Hay caché extendida más allá?
+      const cached = await SyncService.getExtendedTasks();
+      if (cached.length > 0) {
+        const dates = [...allTasks, ...cached]
+          .filter(t => t.date_deadline)
+          .map(t => {
+            let s = t.date_deadline.replace(' ', 'T');
+            if (!s.endsWith('Z')) s += 'Z';
+            return getLocalDateString(new Date(s));
+          })
+          .sort();
+        const maxCachedDate  = dates[dates.length - 1];
+        const currentEndDate = getLocalDateString(new Date(today.getTime() + futureDays * 86400000));
+ 
+        if (currentEndDate < maxCachedDate) {
+          setFutureDays(newFutureDays);
+          setExtendedTasks(cached);
+          return;
+        }
+        Alert.alert(
+          'Límite offline',
+          `Sin conexión puedes avanzar hasta el ${formatDateStr(maxCachedDate)}.`,
+          [{ text: 'Entendido' }]
+        );
+        return;
+      }
+ 
       Alert.alert(
         'Sin conexión',
         'Necesitas conexión a internet para cargar tareas de periodos posteriores.',
@@ -447,25 +544,31 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
       );
       return;
     }
-
-    // Con conexión: lógica normal +7 con fetch si sale del proyecto
-    const newFutureDays  = futureDays + 7;
-    const newLatestDate  = new Date(today);
-    newLatestDate.setDate(today.getDate() + newFutureDays);
-
-    const needsExtended = projectDateEnd && newLatestDate > new Date(projectDateEnd);
-
-    if (needsExtended) {
-      const prevLatestPlus1 = new Date(today);
-      prevLatestPlus1.setDate(today.getDate() + futureDays + 1);
-      const fromStr = getLocalDateString(prevLatestPlus1);
-      const toStr   = getLocalDateString(newLatestDate);
+ 
+    // ── ONLINE ─────────────────────────────────────────────────────────────
+    // Fetch solo para días verdaderamente fuera del proyecto
+    const dayAfterProjectEnd = projectEndDate
+      ? new Date(projectEndDate.getTime() + 86400000)
+      : new Date(today.getTime() + (futureDays + 1) * 86400000);
+ 
+    const prevLatestPlus1 = new Date(today);
+    prevLatestPlus1.setDate(today.getDate() + futureDays + 1);
+ 
+    const fetchFromDate = prevLatestPlus1 > dayAfterProjectEnd
+      ? prevLatestPlus1
+      : dayAfterProjectEnd;
+ 
+    const fromStr = getLocalDateString(fetchFromDate);
+    const toStr   = getLocalDateString(newLatestDate);
+ 
+    if (fromStr <= toStr) {
       const canProceed = await fetchExtendedTasks(fromStr, toStr, 'future');
       if (!canProceed) return;
     }
-
+ 
     setFutureDays(newFutureDays);
   };
+ 
 
   // ── Generación de columnas ───────────────────────────────────────────────────
   const getDaysToShow = () => {

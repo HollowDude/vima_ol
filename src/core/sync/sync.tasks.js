@@ -126,14 +126,17 @@ export async function syncAllTasks(userId) {
 export async function getAllVisibleTasks() {
   try {
     const localTasks = await StorageService.getItem(STORAGE_KEYS.TASKS) || [];
-    const project = await Master.getMasterData('current_project');
+    const project    = await Master.getMasterData('current_project');
     return {
-      tasks: localTasks,
-      projectId: project ? project.id : null,
+      tasks:             localTasks,
+      projectId:         project ? project.id : null,
+      // ✅ FIX: exponer la fecha real de fin del proyecto (campo 'date' de Odoo)
+      // Puede ser null si el proyecto no tiene fecha de fin configurada.
+      projectFinishDate: project?.date || null,
     };
   } catch (error) {
     console.error(' Error obteniendo tareas visibles:', error);
-    return { tasks: [], projectFinishDate: null, projectId: null };
+    return { tasks: [], projectId: null, projectFinishDate: null };
   }
 }
 

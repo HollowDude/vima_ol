@@ -30,13 +30,11 @@ export async function getCurrentProject(){
         const d = String(today.getDate()).padStart(2, '0');
         const todayStr = `${y}-${m}-${d}`;
 
-        // Obtener el proyecto más reciente cuya fecha de inicio ya haya pasado.
-        // Esto evita que un proyecto creado anticipadamente (ej. el día 21 para el
-        // mes siguiente) desplace al proyecto del mes en curso.
         const projects = await OdooService.searchRead(
             'project.project',
             [['date_start', '<=', todayStr]],
-            ['id', 'display_name', 'date_start'],
+            // ✅ FIX: incluir 'date' (fecha de fin del proyecto en Odoo)
+            ['id', 'display_name', 'date_start', 'date'],
             1, 0, 'date_start desc'
         );
 

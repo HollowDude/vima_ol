@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Modal,
   Animated, Dimensions, TouchableWithoutFeedback, PanResponder,
@@ -13,23 +13,26 @@ const { width }       = Dimensions.get('window');
 const MENU_WIDTH      = Math.min(280, width * 0.58);
 const OVERLAY_OPACITY = 0.5;
 
-// Colores originales de la app — nunca cambian en el sidebar
-const GREEN  = '#64c27b';
-const HEADER_BG = '#64c27b';
+// ── Paleta de Colores de Estado ───────────────────────────────────────────────
+const STATUS_COLORS = {
+  online: '#64c27b',     // Verde: Conectado / Todo sincronizado
+  syncing: '#e8a83e',    // Naranja: Sincronizando
+  offline: '#504b4b',    // Gris oscuro: Sin conexión
+  pending: '#d4874e',    // Naranja oscuro: Cambios pendientes
+  gray: '#9CA3AF',       // Gris claro: Iconos / Texto neutro
+};
 
 // ── Mapeo modelo → sección legible ───────────────────────────────────────────
-
 const MODEL_META = {
   'res.partner':        { label: 'Clientes',      icon: 'users'          },
-  'project.task':       { label: 'Tareas',         icon: 'check-square'   },
-  'crm.lead':           { label: 'Oportunidades',  icon: 'briefcase'      },
-  'mail.message':       { label: 'Comentarios',    icon: 'message-circle' },
-  'ir.attachment':      { label: 'Adjuntos',       icon: 'paperclip'      },
-  'survey.user_input':  { label: 'Encuestas',      icon: 'file-text'      },
+  'project.task':       { label: 'Tareas',        icon: 'check-square'   },
+  'crm.lead':           { label: 'Oportunidades', icon: 'briefcase'      },
+  'mail.message':       { label: 'Comentarios',   icon: 'message-circle' },
+  'ir.attachment':      { label: 'Adjuntos',      icon: 'paperclip'      },
+  'survey.user_input':  { label: 'Encuestas',     icon: 'file-text'      },
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
 function timeAgo(date) {
   if (!date) return 'Nunca';
   const s = Math.floor((Date.now() - new Date(date)) / 1000);
@@ -49,27 +52,24 @@ function countByModel(pending = []) {
 }
 
 // ── Panel de estado ───────────────────────────────────────────────────────────
-
-function SyncPanel({ isOnline, byModel }) {
-  const { pendingCount, lastSync, isSyncing, statusLabel } = useSyncContext();
-
+function SyncPanel({ isOnline, isSyncing, lastSync, pendingCount, statusLabel, activeColor, byModel }) {
   const entries = Object.entries(byModel);
+  const hasPending = pendingCount > 0;
 
   return (
     <View style={styles.syncPanel}>
-
       {/* Fila: conexión + último sync */}
       <View style={styles.metaRow}>
         <Text style={styles.metaSep}></Text>
-        <Feather name="clock" size={11} color="#9CA3AF" />
+        <Feather name="clock" size={11} color={activeColor} />
         <Text style={styles.metaText}>Última Sync: {timeAgo(lastSync)}</Text>
       </View>
 
       {/* Fila: actividad en curso */}
       {isSyncing && (
         <View style={styles.metaRow}>
-          <Feather name="refresh-cw" size={12} color="#e8a83e" />
-          <Text style={[styles.metaText, { color: '#e8a83e', fontWeight: '700' }]}>
+          <Feather name="refresh-cw" size={12} color={activeColor} />
+          <Text style={[styles.metaText, { color: activeColor, fontWeight: '700' }]}>
             {statusLabel || 'Sincronizando...'}
           </Text>
         </View>
@@ -77,32 +77,31 @@ function SyncPanel({ isOnline, byModel }) {
 
       {/* Bloque de pendientes */}
       <View style={styles.pendingBlock}>
-
         {/* Título principal */}
         <View style={styles.pendingTitleRow}>
           <Feather
-            name={pendingCount > 0 ? 'upload-cloud' : 'check-circle'}
+            name={hasPending ? 'upload-cloud' : 'check-circle'}
             size={15}
-            color={pendingCount > 0 ? '#d4874e' : GREEN}
+            color={hasPending ? STATUS_COLORS.pending : STATUS_COLORS.online}
           />
           <Text style={[
             styles.pendingTitle,
-            { color: pendingCount > 0 ? '#d4874e' : GREEN },
+            { color: hasPending ? STATUS_COLORS.pending : STATUS_COLORS.online },
           ]}>
-            {pendingCount > 0
+            {hasPending
               ? `${pendingCount} cambio${pendingCount > 1 ? 's' : ''} pendiente${pendingCount > 1 ? 's' : ''}`
               : 'Todo sincronizado'}
           </Text>
         </View>
 
         {/* Desglose por sección */}
-        {pendingCount > 0 && entries.length > 0 && (
+        {hasPending && entries.length > 0 && (
           <View style={styles.breakdown}>
             {entries.map(([model, count]) => {
               const meta = MODEL_META[model] || { label: model, icon: 'circle' };
               return (
                 <View key={model} style={styles.breakdownRow}>
-                  <Feather name={meta.icon} size={12} color="#9CA3AF" />
+                  <Feather name={meta.icon} size={12} color={STATUS_COLORS.gray} />
                   <Text style={styles.breakdownLabel}>{meta.label}</Text>
                   <View style={styles.countBadge}>
                     <Text style={styles.countText}>{count}</Text>
@@ -112,22 +111,26 @@ function SyncPanel({ isOnline, byModel }) {
             })}
           </View>
         )}
-
       </View>
     </View>
   );
 }
 
 // ── Componente principal ──────────────────────────────────────────────────────
-
 export default function SlideMenu({ visible, onClose, userData, username, onLogout }) {
-  const { isOnline }                       = useNetwork();
-  const { refreshPendingCount }            = useSyncContext();
-  const [byModel, setByModel]              = useState({});
+  const { isOnline } = useNetwork();
+  const { pendingCount, lastSync, isSyncing, statusLabel, refreshPendingCount } = useSyncContext();
+  const [byModel, setByModel] = useState({});
 
   const slideAnim = React.useRef(new Animated.Value(-MENU_WIDTH)).current;
   const panX      = React.useRef(new Animated.Value(0)).current;
   const combined  = Animated.add(slideAnim, panX);
+
+  // Lógica derivada para el color (Single Source of Truth)
+  const activeColor = useMemo(() => {
+    if (isSyncing) return STATUS_COLORS.syncing;
+    return isOnline ? STATUS_COLORS.online : STATUS_COLORS.offline;
+  }, [isSyncing, isOnline]);
 
   const overlayOpacity = combined.interpolate({
     inputRange: [-MENU_WIDTH, 0], outputRange: [0, OVERLAY_OPACITY], extrapolate: 'clamp',
@@ -167,7 +170,7 @@ export default function SlideMenu({ visible, onClose, userData, username, onLogo
         if (g.dx < -MENU_WIDTH / 3 || g.vx < -0.5) {
           Animated.parallel([
             Animated.timing(slideAnim, { toValue: -MENU_WIDTH, duration: 180, useNativeDriver: true }),
-            Animated.timing(panX,      { toValue: 0,           duration: 180, useNativeDriver: true }),
+            Animated.timing(panX,      { toValue: 0,          duration: 180, useNativeDriver: true }),
           ]).start(() => onClose?.());
         } else {
           Animated.parallel([
@@ -184,7 +187,6 @@ export default function SlideMenu({ visible, onClose, userData, username, onLogo
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
       <View style={styles.root}>
-
         <TouchableWithoutFeedback onPress={onClose}>
           <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]} />
         </TouchableWithoutFeedback>
@@ -192,7 +194,7 @@ export default function SlideMenu({ visible, onClose, userData, username, onLogo
         <Animated.View style={[styles.menu, { transform: [{ translateX: combined }] }]}>
 
           {/* 1. HEADER */}
-          <View style={[styles.menuHeader, { backgroundColor: HEADER_BG }]}>
+          <View style={[styles.menuHeader, { backgroundColor: activeColor }]}>
             <View style={styles.avatar}>
               <Feather name="user" size={32} color="#fff" />
             </View>
@@ -200,17 +202,23 @@ export default function SlideMenu({ visible, onClose, userData, username, onLogo
             <Text style={styles.userEmail}>{userData?.username || ''}</Text>
           </View>
 
-          {/* 2. CONTENIDO MEDIO (Ocupa el espacio restante) */}
+          {/* 2. CONTENIDO MEDIO */}
           <View style={styles.middleContent}>
-            <SyncPanel isOnline={isOnline} byModel={byModel} />
+            <SyncPanel 
+              isOnline={isOnline} 
+              isSyncing={isSyncing}
+              lastSync={lastSync}
+              pendingCount={pendingCount}
+              statusLabel={statusLabel}
+              activeColor={activeColor}
+              byModel={byModel} 
+            />
           </View>
 
-          {/* 3. SECCIÓN INFERIOR (Status + Logout) */}
+          {/* 3. SECCIÓN INFERIOR */}
           <View style={styles.bottomSection}>
-            
-            {/* Indicador de conexión centrado */}
             <View style={styles.statusContainer}>
-              <View style={[styles.dot, { backgroundColor: isOnline ? GREEN : '#9CA3AF' }]} />
+              <View style={[styles.dot, { backgroundColor: isOnline ? STATUS_COLORS.online : STATUS_COLORS.gray }]} />
               <Text style={styles.metaText}>
                 {isOnline ? 'En línea' : 'Sin conexión'}
               </Text>
@@ -218,7 +226,6 @@ export default function SlideMenu({ visible, onClose, userData, username, onLogo
 
             <View style={styles.dividerSmall} />
 
-            {/* Botón Cerrar Sesión centrado */}
             <TouchableOpacity
               style={styles.logoutButton}
               onPress={() => { onClose?.(); onLogout?.(); }}
@@ -229,7 +236,7 @@ export default function SlideMenu({ visible, onClose, userData, username, onLogo
             </TouchableOpacity>
           </View>
 
-          {/* 4. FOOTER (Copyright) */}
+          {/* 4. FOOTER */}
           <View style={styles.menuFooter}>
             <Text style={styles.footerText}>VIMA © 2026</Text>
             <Text style={styles.footerVersion}>Versión 1.2.0</Text>
@@ -253,7 +260,6 @@ export default function SlideMenu({ visible, onClose, userData, username, onLogo
 }
 
 // ── Estilos ───────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
   root:    { flex: 1 },
   overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: '#000' },
@@ -271,7 +277,6 @@ const styles = StyleSheet.create({
     overflow: 'visible',
   },
 
-  // Header
   menuHeader: {
     padding: 24,
     paddingTop: 45,
@@ -285,15 +290,13 @@ const styles = StyleSheet.create({
   userName:  { fontSize: 18, fontWeight: '700', color: '#fff', marginBottom: 4 },
   userEmail: { fontSize: 13, color: 'rgba(255,255,255,0.8)' },
 
-  // NUEVO: Este contenedor empuja todo lo que esté debajo al final
   middleContent: {
     flex: 1, 
   },
 
-  // SECCIÓN INFERIOR
   bottomSection: {
     paddingVertical: 10,
-    alignItems: 'center', // Centra todo horizontalmente
+    alignItems: 'center',
   },
   statusContainer: {
     flexDirection: 'row',
@@ -321,7 +324,6 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
 
-  // Panel sync
   syncPanel: {
     paddingHorizontal: 16,
     paddingVertical: 14,
@@ -338,7 +340,6 @@ const styles = StyleSheet.create({
   metaSep:  { fontSize: 11, color: '#D1D5DB', marginHorizontal: 2 },
   metaText: { fontSize: 12, color: '#6B7280' },
 
-  // Bloque pendientes
   pendingBlock: {
     marginTop: 8,
     backgroundColor: '#fff',
@@ -357,7 +358,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // Desglose
   breakdown: {
     marginTop: 10,
     gap: 8,
@@ -391,19 +391,6 @@ const styles = StyleSheet.create({
     color: '#D97706',
   },
 
-  divider: { height: 1, backgroundColor: '#E5E7EB' },
-
-  // Opciones
-  menuOptions:  { flex: 1, paddingTop: 8 },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-  },
-  menuItemText: { fontSize: 15, fontWeight: '500', color: '#0B1B2A', marginLeft: 16 },
-
-  // Footer
   menuFooter: {
     padding: 24,
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -412,7 +399,6 @@ const styles = StyleSheet.create({
   footerText:    { fontSize: 12, color: '#6B7280', textAlign: 'center', marginBottom: 4 },
   footerVersion: { fontSize: 11, color: '#9CA3AF', textAlign: 'center' },
 
-  // Handle
   handleContainer: {
     position: 'absolute',
     right: -20, top: '50%', marginTop: -28,
