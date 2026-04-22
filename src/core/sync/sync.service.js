@@ -123,7 +123,15 @@ class SyncService {
   async createTaskLocally(taskData) { return Tasks.createTaskLocally(taskData); }
   async updateTaskLocally(taskId, updates, opts) { return Tasks.updateTaskLocally(taskId, updates, opts); }
   async getSurveysForTask(taskId) {return Surveys.getSurveysForTask(taskId); }
-  async syncTasks(extraProjectId) { return Tasks.syncTasks(extraProjectId); }
+ async syncTasks(extraProjectId) {
+    const result = await Tasks.syncTasks(extraProjectId);
+    // Después de escribir las tareas del proyecto en TASKS, purgar del cache extendido
+    // cualquier tarea con el mismo ID para que nunca sean tratadas como históricas.
+    if (result?.subtasks?.length) {
+      await Tasks.purgeExtendedTasksWithIds(result.subtasks.map(t => t.id));
+    }
+    return result;
+  }
   async syncAllTasks(userId) { return Tasks.syncAllTasks(userId); }
   async getAllVisibleTasks() { return Tasks.getAllVisibleTasks(); }
   async replaceLocalTaskId(tempId, realId) { return Tasks.replaceLocalTaskId(tempId, realId); }
@@ -214,11 +222,12 @@ class SyncService {
       console.error(' Error limpiando caché de proyecto:', error);
     }
   }
-  async fetchAndCacheTasksForRange(from, to)  { return Tasks.fetchAndCacheTasksForRange(from, to); }
-  async getExtendedTasks()                    { return Tasks.getExtendedTasks(); }
-  async cleanExpiredExtendedTasks()           { return Tasks.cleanExpiredExtendedTasks(); }
-  async touchBatchForTask(taskId)             { return Tasks.touchBatchForTask(taskId); }
-  async updateExtendedTaskLocally(id, updates){ return Tasks.updateExtendedTaskLocally(id, updates); }
+  async purgeExtendedTasksWithIds(ids)            { return Tasks.purgeExtendedTasksWithIds(ids); }
+  async fetchAndCacheTasksForRange(from, to)      { return Tasks.fetchAndCacheTasksForRange(from, to); }
+  async getExtendedTasks()                        { return Tasks.getExtendedTasks(); }
+  async cleanExpiredExtendedTasks()               { return Tasks.cleanExpiredExtendedTasks(); }
+  async touchBatchForTask(taskId)                 { return Tasks.touchBatchForTask(taskId); }
+  async updateExtendedTaskLocally(id, updates)    { return Tasks.updateExtendedTaskLocally(id, updates); }
  
 }
 

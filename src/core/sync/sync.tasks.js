@@ -17,26 +17,22 @@ export async function syncTasks(extraProjectId = null) {
 
     if (!latestProject) {
       await StorageService.setItem(STORAGE_KEYS.TASKS, []);
-      return { subtasks: [] }; // Retorno seguro
+      return { subtasks: [] };
     }
 
     const projectId = latestProject.id;
-    
-    // --- LÓGICA DE DOMINIO DINÁMICO ---
+
     let projectDomainFilter;
     console.log(`📆📆📆📆📆 (ID: ${projectId}) junto con el nuevo: ${extraProjectId}`);
     if (extraProjectId && extraProjectId !== projectId) {
-        // Calcula la fecha de corte el día 25 del mes actual
         const now = new Date();
-        // Forzar el día 25 del mes/año actual
         const cutoffDate = new Date(now.getFullYear(), now.getMonth(), 25);
-        // Formato YYYY-MM-DD
         const cutoffString = cutoffDate.toISOString().split('T')[0];
 
         console.log(`📆 Filtro Mixto: Proyecto Actual (${projectId}) O [Proyecto Viejo (${extraProjectId}) Y Deadline >= ${cutoffString}]`);
 
         projectDomainFilter = [
-            '|', 
+            '|',
             ['project_id', '=', projectId],
             '&',
                 ['project_id', '=', extraProjectId],
@@ -48,7 +44,7 @@ export async function syncTasks(extraProjectId = null) {
 
     const tasksDomain = [
         '&',
-        ...projectDomainFilter, // Expando el filtro del proyecto
+        ...projectDomainFilter,
         '&',
             ['active', '=', true],
             '|',
@@ -84,7 +80,6 @@ export async function syncAllTasks(userId) {
       ? current_user[0].partner_id[0]
       : null;
 
-
     try {
       await Pending.syncPendingChangesNonSurvey();
     } catch (e) {
@@ -111,7 +106,7 @@ export async function syncAllTasks(userId) {
       'project.task',
       tasksDomain,
       [
-        'id', 'display_name', 
+        'id', 'display_name',
         'name', 'project_id', 'user_ids',
         'parent_id', 'child_ids', 'date_deadline', 'stage_id',
         'description', 'partner_id', 'priority_level', 'management_tags',
@@ -119,7 +114,6 @@ export async function syncAllTasks(userId) {
       ],
       1000
     );
-
 
     await StorageService.setItem(STORAGE_KEYS.TASKS, tasks);
     return tasks;
@@ -193,7 +187,6 @@ export async function createTaskLocally(taskData = {}) {
 
 export async function updateTaskLocally(taskId, updates = {}, opts = {}) {
   try {
-    // ── 1. Intentar en TASKS (proyecto actual) ────────────────────────────────
     const tasks = (await StorageService.getItem(STORAGE_KEYS.TASKS)) || [];
     let found = false;
     const updatedTasks = tasks.map(t => {
@@ -208,10 +201,8 @@ export async function updateTaskLocally(taskId, updates = {}, opts = {}) {
       return updatedTasks.find(t => t.id === taskId);
     }
 
-    // ── 2. Fallback: buscar en cache extendido ────────────────────────────────
     const updatedExtended = await updateExtendedTaskLocally(taskId, updates);
     if (updatedExtended) {
-      // touchBatchForTask ya lo llama updateExtendedTaskLocally internamente
       if (!opts.noPending) await Pending.addPendingChange('project.task', taskId, updates);
       return updatedExtended;
     }
@@ -222,11 +213,19 @@ export async function updateTaskLocally(taskId, updates = {}, opts = {}) {
     throw error;
   }
 }
+
 // ─────────────────────────────────────────────────────────────────────────────
-// TAREAS EXTENDIDAS — pegar al FINAL de src/core/sync/sync.tasks.js
+// TAREAS EXTENDIDAS
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const EXTENDED_TASKS_TTL_MS = 60 * 1000; // 1 min (pruebas) — subir a producción
+/**
+ * TTL de la caché de tareas extendidas.
+ * • Desarrollo  → 1 minuto  (para poder probar la expiración rápidamente)
+ * • Producción  → 24 horas
+ */
+export const EXTENDED_TASKS_TTL_MS = __DEV__
+  ? 60 * 1000              // 1 min  — desarrollo
+  : 24 * 60 * 60 * 1000;  // 24 h   — producción
 
 async function _readCache() {
   const stored  = (await StorageService.getItem(STORAGE_KEYS.EXTENDED_TASKS)) || { batches: [] };

@@ -41,8 +41,18 @@ const getLocalDateString = (date) => {
  */
 const getEndOfMonthDate = (dateStr) => {
   const d = new Date(dateStr);
-  // new Date(year, month+1, 0) = último día del mes
   return new Date(d.getFullYear(), d.getMonth() + 1, 0);
+};
+
+/**
+ * Formatea 'YYYY-MM-DD' a texto legible en español.
+ * Ej: '2026-01-06' → '6 de enero de 2026'
+ */
+const formatDateStr = (dateStr) => {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('es-ES', {
+    day: '2-digit', month: 'long', year: 'numeric',
+  });
 };
 
 // ─── DayTasksModal ─────────────────────────────────────────────────────────────
@@ -141,16 +151,21 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   const [futureDays, setFutureDays] = useState(INITIAL_FUTURE_DAYS);
 
   // ── Tareas extendidas (históricas / futuras fuera del proyecto actual) ────────
-  const [extendedTasks, setExtendedTasks]   = useState([]);
+  const [extendedTasks, setExtendedTasks]     = useState([]);
   const [loadingExtended, setLoadingExtended] = useState(false);
 
-  // ── Mes visible en el calendario (se actualiza al hacer scroll) ───────────────
+  // ── Mes visible en el calendario ─────────────────────────────────────────────
   const [visibleMonth, setVisibleMonth] = useState('');
 
   /**
-   * Límites del proyecto actual:
-   *   projectDateStart → primer día del proyecto (YYYY-MM-DD)
-   *   projectDateEnd   → último día estimado del proyecto (fin de mes)
+   * Límites del proyecto actual calculados a partir de las fechas REALES
+   * de las tareas (no de project.date_start, que puede ser null o incorrecto).
+   *
+   *   projectDateStart → fecha_deadline más antigua entre todas las tareas actuales
+   *   projectDateEnd   → fecha_deadline más reciente entre todas las tareas actuales
+   *
+   * Cualquier día dentro de [projectDateStart, projectDateEnd] es accesible
+   * siempre, con o sin conexión, sin necesidad de caché extendida.
    */
   const [projectDateStart, setProjectDateStart] = useState(null);
   const [projectDateEnd,   setProjectDateEnd]   = useState(null);
@@ -158,17 +173,27 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   const prevOnline  = usePrevious(isOnline);
   const HOUR_HEIGHT = BASE_HOUR_HEIGHT * zoomLevel;
 
-  // ── Vista unificada: tareas del proyecto + tareas extendidas (sin dupes) ────
+  // ── Vista unificada: tareas del proyecto + tareas extendidas (sin dupes) ─────
   const allVisibleTasks = useMemo(() => {
     const localIds = new Set(allTasks.map(t => t.id));
     return [...allTasks, ...extendedTasks.filter(t => !localIds.has(t.id))];
   }, [allTasks, extendedTasks]);
 
   /**
-   * Set de IDs que vienen del cache extendido (no del proyecto actual).
-   * Cualquier tarea en este set se considera "histórica" → solo lectura.
+   * FIX — Bug 5: una tarea es "histórica" solo si viene del caché extendido
+   * Y NO pertenece al proyecto actual. Antes se marcaban como históricas
+   * tareas del proyecto actual que coincidían con fechas fuera del rango
+   * mal calculado de projectDateStart/End.
    */
-  const extendedTaskIds = useMemo(() => new Set(extendedTasks.map(t => t.id)), [extendedTasks]);
+  const extendedTaskIds = useMemo(() => {
+    const projectTaskIds = new Set(allTasks.map(t => t.id));
+    return new Set(
+      extendedTasks
+        .filter(t => !projectTaskIds.has(t.id))
+        .map(t => t.id)
+    );
+  }, [allTasks, extendedTasks]);
+
   const cachedDatesSet = useMemo(() => {
     const set = new Set();
     extendedTasks.forEach(t => {
@@ -183,9 +208,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   // ── Efectos ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     loadTasks();
-    // Limpieza de cache expirado al montar
     SyncService.cleanExpiredExtendedTasks();
-    // Mes inicial = mes de hoy
     setVisibleMonth(new Date().toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }));
   }, []);
 
@@ -209,14 +232,36 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
       setAllTasks(result.tasks);
       setProjectId(result.projectId);
 
-      // Límites del proyecto actual
-      const project = await SyncService.getMasterData('current_project');
-      if (project?.date_start) {
-        setProjectDateStart(project.date_start);
-        setProjectDateEnd(getLocalDateString(getEndOfMonthDate(project.date_start)));
+      /**
+       * FIX — Bug 2: calcular los límites del proyecto a partir de los
+       * date_deadline REALES de las tareas, no de project.date_start.
+       *
+       * Esto evita que tareas del proyecto actual queden fuera del rango
+       * y se descarguen de nuevo como "extendidas" (causando el Bug 5).
+       */
+      const taskDates = result.tasks
+        .filter(t => t.date_deadline)
+        .map(t => {
+          let s = t.date_deadline.replace(' ', 'T');
+          if (!s.endsWith('Z')) s += 'Z';
+          return new Date(s);
+        });
+
+      if (taskDates.length > 0) {
+        const minTs = Math.min(...taskDates.map(d => d.getTime()));
+        const maxTs = Math.max(...taskDates.map(d => d.getTime()));
+        setProjectDateStart(getLocalDateString(new Date(minTs)));
+        setProjectDateEnd(getLocalDateString(new Date(maxTs)));
+      } else {
+        // Sin tareas: usar date_start del proyecto como fallback
+        const project = await SyncService.getMasterData('current_project');
+        if (project?.date_start) {
+          setProjectDateStart(project.date_start);
+          setProjectDateEnd(getLocalDateString(getEndOfMonthDate(project.date_start)));
+        }
       }
 
-      // Cargar tareas extendidas ya cacheadas (puede haber de sesiones anteriores aún vigentes)
+      // Tareas extendidas cacheadas de sesiones anteriores (aún vigentes)
       const cached = await SyncService.getExtendedTasks();
       setExtendedTasks(cached);
     } catch (e) {
@@ -226,30 +271,76 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
 
   // ─── Fetch de tareas extendidas ──────────────────────────────────────────────
   /**
-   * Intenta obtener tareas para [fromStr, toStr]:
-   *  - Online  → fetch de Odoo + guarda en cache
-   *  - Offline → usa cache existente si hay cobertura; si no, bloquea y avisa
+   * Intenta obtener tareas para [fromStr, toStr].
    *
-   * @returns {boolean} true si se puede proceder (extiende el calendario)
-   *                    false si el usuario debe cancelar la acción
+   * • Online  → fetch de Odoo + guarda en caché.
+   * • Offline → revisa si los datos disponibles (proyecto + caché) cubren el
+   *             rango solicitado antes de permitir la expansión del calendario.
+   *
+   * REGLA DE LÍMITE OFFLINE:
+   *   - Dirección "past":   bloquear si `toStr < minAccessible`
+   *     (el lote COMPLETO de nuevos días queda antes de cualquier tarea conocida)
+   *   - Dirección "future": bloquear si `fromStr > maxAccessible`
+   *     (el lote COMPLETO de nuevos días queda después de cualquier tarea conocida)
+   *
+   * Esto permite que el usuario navegue por días vacíos HACIA una tarea
+   * cacheada, pero le impide ir más allá de ella cuando no hay conexión.
+   *
+   * @returns {boolean} true → proceder con la expansión del calendario
+   *                    false → no expandir (usuario informado)
    */
   const fetchExtendedTasks = async (fromStr, toStr, direction) => {
     if (!isOnline) {
       const cached = await SyncService.getExtendedTasks();
 
       if (cached.length > 0) {
-        // Hay datos cacheados en algún punto del timeline extendido.
-        // Permitir que el calendario se amplíe aunque el rango nuevo [fromStr, toStr]
-        // no tenga tareas: el usuario puede desplazarse por días vacíos hasta llegar
-        // a los días que sí tienen tareas cacheadas (ej. Jan 4 tras días vacíos Jan 5-30).
+        // Calcular límites reales: mínimo y máximo entre tareas del
+        // proyecto actual Y tareas cacheadas.
+        const allBoundTasks = [...allTasks, ...cached];
+        const accessibleDates = allBoundTasks
+          .filter(t => t.date_deadline)
+          .map(t => {
+            let s = t.date_deadline.replace(' ', 'T');
+            if (!s.endsWith('Z')) s += 'Z';
+            return getLocalDateString(new Date(s));
+          })
+          .sort();
+
+        const minAccessible = accessibleDates[0];
+        const maxAccessible = accessibleDates[accessibleDates.length - 1];
+
+        // Bloquear solo si el lote COMPLETO de nuevos días queda fuera
+        // del rango de datos disponibles.
+        if (direction === 'past' && toStr < minAccessible) {
+          Alert.alert(
+            'Límite offline',
+            `Sin conexión puedes retroceder como máximo hasta el ${formatDateStr(minAccessible)}, ` +
+            `donde se encuentra la tarea más antigua disponible.`,
+            [{ text: 'Entendido' }]
+          );
+          return false;
+        }
+
+        if (direction === 'future' && fromStr > maxAccessible) {
+          Alert.alert(
+            'Límite offline',
+            `Sin conexión puedes avanzar como máximo hasta el ${formatDateStr(maxAccessible)}, ` +
+            `donde se encuentra la tarea más próxima disponible.`,
+            [{ text: 'Entendido' }]
+          );
+          return false;
+        }
+
         setExtendedTasks(cached);
         return true;
       }
 
-      // Sin ningún cache extendido disponible → informar y bloquear
+      // Sin caché en absoluto
       Alert.alert(
         'Sin conexión',
-        `Necesitas conexión a internet para cargar tareas ${direction === 'past' ? 'anteriores' : 'futuras'} a este periodo.\n\nConéctate e inténtalo de nuevo.`,
+        `Necesitas conexión para cargar tareas ` +
+        `${direction === 'past' ? 'anteriores' : 'futuras'} al proyecto actual.\n\n` +
+        `Conéctate e inténtalo de nuevo.`,
         [{ text: 'Entendido' }]
       );
       return false;
@@ -270,7 +361,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
         'Error',
         'No se pudieron cargar las tareas del periodo solicitado. Inténtalo de nuevo.'
       );
-      return false; // Bloquear la extensión del calendario
+      return false;
     } finally {
       setLoadingExtended(false);
     }
@@ -278,35 +369,56 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
 
   // ── Cargar días pasados ───────────────────────────────────────────────────────
   const handleLoadPastDays = async () => {
-    const newPastDays = pastDays + 7;
-
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // El rango de los 7 NUEVOS días que se añaden al calendario
+    // Sin conexión: mostrar hasta el inicio del proyecto de un salto
+    if (!isOnline && projectDateStart) {
+      const projectStart = new Date(projectDateStart);
+      projectStart.setHours(0, 0, 0, 0);
+      const daysSinceStart = Math.ceil((today - projectStart) / (1000 * 60 * 60 * 24));
+
+      if (pastDays < daysSinceStart) {
+        const compensation = (daysSinceStart - pastDays) * DAY_WIDTH;
+        setPastDays(daysSinceStart);
+        setTimeout(() => {
+          scrollViewRef.current?.scrollTo({
+            x: scrollXRef.current + compensation,
+            animated: false,
+          });
+        }, 80);
+        return;
+      }
+      // Ya mostramos todo el proyecto hacia atrás — necesita red para más
+      Alert.alert(
+        'Sin conexión',
+        'Necesitas conexión a internet para cargar tareas de periodos anteriores.',
+        [{ text: 'Entendido' }]
+      );
+      return;
+    }
+
+    // Con conexión: lógica normal +7 con fetch si sale del proyecto
+    const newPastDays = pastDays + 7;
     const newEarliestDate = new Date(today);
     newEarliestDate.setDate(today.getDate() - newPastDays);
 
-    const prevEarliestMinus1 = new Date(today);
-    prevEarliestMinus1.setDate(today.getDate() - pastDays - 1);
-
-    const fromStr = getLocalDateString(newEarliestDate);
-    const toStr   = getLocalDateString(prevEarliestMinus1);
-
-    // ¿Estos nuevos días caen fuera del rango del proyecto actual?
     const needsExtended = projectDateStart && newEarliestDate < new Date(projectDateStart);
 
     if (needsExtended) {
+      const prevEarliestMinus1 = new Date(today);
+      prevEarliestMinus1.setDate(today.getDate() - pastDays - 1);
+      const fromStr = getLocalDateString(newEarliestDate);
+      const toStr   = getLocalDateString(prevEarliestMinus1);
       const canProceed = await fetchExtendedTasks(fromStr, toStr, 'past');
-      if (!canProceed) return; // El usuario fue informado; no extender el calendario
+      if (!canProceed) return;
     }
 
-    // Extender el calendario y compensar el scroll para que no salte
     const compensation = 7 * DAY_WIDTH;
     setPastDays(newPastDays);
     setTimeout(() => {
       scrollViewRef.current?.scrollTo({
-        x:        scrollXRef.current + compensation,
+        x: scrollXRef.current + compensation,
         animated: false,
       });
     }, 80);
@@ -314,27 +426,42 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
 
   // ── Cargar días futuros ───────────────────────────────────────────────────────
   const handleLoadFutureDays = async () => {
-    const newFutureDays = futureDays + 7;
-
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // El rango de los 7 NUEVOS días que se añaden al calendario
-    const prevLatestPlus1 = new Date(today);
-    prevLatestPlus1.setDate(today.getDate() + futureDays + 1);
+    // Sin conexión: mostrar hasta el fin del proyecto de un salto
+    if (!isOnline && projectDateEnd) {
+      const projectEnd = new Date(projectDateEnd);
+      projectEnd.setHours(0, 0, 0, 0);
+      const daysToEnd = Math.ceil((projectEnd - today) / (1000 * 60 * 60 * 24));
 
-    const newLatestDate = new Date(today);
+      if (futureDays < daysToEnd) {
+        setFutureDays(daysToEnd);
+        return;
+      }
+      // Ya mostramos todo el proyecto hacia adelante — necesita red para más
+      Alert.alert(
+        'Sin conexión',
+        'Necesitas conexión a internet para cargar tareas de periodos posteriores.',
+        [{ text: 'Entendido' }]
+      );
+      return;
+    }
+
+    // Con conexión: lógica normal +7 con fetch si sale del proyecto
+    const newFutureDays  = futureDays + 7;
+    const newLatestDate  = new Date(today);
     newLatestDate.setDate(today.getDate() + newFutureDays);
 
-    const fromStr = getLocalDateString(prevLatestPlus1);
-    const toStr   = getLocalDateString(newLatestDate);
-
-    // ¿Estos nuevos días caen fuera del rango del proyecto actual?
     const needsExtended = projectDateEnd && newLatestDate > new Date(projectDateEnd);
 
     if (needsExtended) {
+      const prevLatestPlus1 = new Date(today);
+      prevLatestPlus1.setDate(today.getDate() + futureDays + 1);
+      const fromStr = getLocalDateString(prevLatestPlus1);
+      const toStr   = getLocalDateString(newLatestDate);
       const canProceed = await fetchExtendedTasks(fromStr, toStr, 'future');
-      if (!canProceed) return; // No extender el calendario
+      if (!canProceed) return;
     }
 
     setFutureDays(newFutureDays);
@@ -366,10 +493,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
     const x = e.nativeEvent.contentOffset.x;
     scrollXRef.current = x;
 
-    // Calcular qué día está en el centro de la pantalla visible
     const screenWidth = Dimensions.get('window').width;
-    // La columna de horas (60px) siempre está fija a la izquierda del scroll horizontal,
-    // así que el centro visual de los días es la mitad de la pantalla menos 60px / DAY_WIDTH
     const centerOffset = x + (screenWidth - 60) / 2;
     const centerDayIndex = Math.round(centerOffset / DAY_WIDTH);
     const clampedIndex = Math.max(0, Math.min(centerDayIndex, days.length - 1));
@@ -428,7 +552,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
       return getLocalDateString(d) === dayDateString && d.getHours() === hour;
     });
 
-  // ── Estadísticas (sobre todas las tareas visibles) ───────────────────────────
+  // ── Estadísticas ─────────────────────────────────────────────────────────────
   const activeCount = allVisibleTasks.filter(t =>
     ['01_in_progress', '02_changes_requested', '03_approved', '04_waiting_normal'].includes(t.state)
   ).length;
@@ -581,9 +705,8 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                         </Text>
                       )}
 
-                      {/* Fila de marcadores inferiores */}
+                      {/* Marcadores inferiores */}
                       <View style={styles.dayMarkerRow}>
-                        {/* Marcador de día con cache extendido */}
                         {isCached && (
                           <View style={[styles.dayMarker, styles.dayMarkerCached]}>
                             <Feather name="cloud" size={8} color="#7C3AED" />
@@ -718,7 +841,6 @@ const styles = StyleSheet.create({
   zoomButton: { padding: 8 },
   zoomText:   { fontSize: 13, fontWeight: '600', color: '#6B7280', minWidth: 50, textAlign: 'center' },
 
-  // ── Indicador de mes ────────────────────────────────────────────────────────
   monthIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -736,9 +858,6 @@ const styles = StyleSheet.create({
     textTransform: 'capitalize',
   },
 
-  // ── Banner carga extendida ──────────────────────────────────────────────────
-
-  // ── Calendario ──────────────────────────────────────────────────────────────
   calendarScroll: { flex: 1 },
   calendar:       { flexDirection: 'row' },
   hoursColumn:    { width: 60 },
@@ -756,7 +875,6 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
 
-  // Columna de navegación al futuro: mismas dimensiones que hoursColumn
   futureNavColumn: {
     width:    60,
     overflow: 'hidden',
@@ -767,29 +885,25 @@ const styles = StyleSheet.create({
   },
 
   headerCell: {
-    height: 72,                           // un poco más alto para acomodar la fila de marcadores
+    height: 72,
     justifyContent: 'center', alignItems: 'center',
     borderBottomWidth: 2, borderBottomColor: '#E6E9EF', backgroundColor: '#fcf8f4ff',
     paddingVertical: 4,
   },
-  // ── Fondos de cabecera por situación ──────────────────────────────────────
   headerPast:         { backgroundColor: '#F3F4F6' },
   headerFuture:       { backgroundColor: '#EFF6FF' },
   headerToday:        { backgroundColor: '#DCFCE7', borderBottomColor: '#22C55E', borderBottomWidth: 3 },
   headerOutOfProject: { backgroundColor: '#F3F0FF', borderBottomColor: '#C4B5FD' },
 
-  // ── Nombre del día ─────────────────────────────────────────────────────────
   dayName:        { fontSize: 10, textTransform: 'uppercase', fontWeight: '700', letterSpacing: 0.4 },
   dayNamePast:    { color: '#9CA3AF' },
   dayNameFuture:  { color: '#60A5FA' },
   dayNameToday:   { color: '#15803D', fontSize: 11 },
 
-  // ── Número del día ─────────────────────────────────────────────────────────
   dayNumber:        { fontSize: 18, fontWeight: '700', marginTop: 1 },
   dayNumberPast:    { color: '#9CA3AF' },
   dayNumberFuture:  { color: '#3B82F6' },
 
-  // ── Círculo del día actual ─────────────────────────────────────────────────
   todayCircle: {
     width: 34, height: 34, borderRadius: 17,
     backgroundColor: '#22C55E',
@@ -803,7 +917,6 @@ const styles = StyleSheet.create({
   },
   todayCircleText: { fontSize: 17, fontWeight: '800', color: '#fff' },
 
-  // ── Fila de marcadores inferiores ──────────────────────────────────────────
   dayMarkerRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 3, marginTop: 3, height: 14,

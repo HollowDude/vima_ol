@@ -24,26 +24,25 @@ export async function getUserId(){
 
 export async function getCurrentProject(){
     try {
-          const allProjects = await OdooService.searchRead(
-              'project.project', 
-              [], 
-              ['id', 'display_name', 'date_start'], 
-              100, // Ponemos un límite alto (ej. 100 o 1000) para ver la lista completa
-              0, 
-              'date_start desc'
-          );
-          console.log("=== LISTA DE TODOS LOS PROYECTOS ===");
-          console.log(allProjects); // console.table facilita mucho la lectura de arrays de objetos
-      } catch (e) {
-          console.error("Error intentando imprimir todos los proyectos:", e);
-      }
-    const latestProject = await OdooService.searchRead(
-      'project.project', 
-      [], 
-      ['id', 'display_name', 'date_start'], 
-      1, 0, 'date_start desc'
-    );
+        const today = new Date();
+        const y = today.getFullYear();
+        const m = String(today.getMonth() + 1).padStart(2, '0');
+        const d = String(today.getDate()).padStart(2, '0');
+        const todayStr = `${y}-${m}-${d}`;
 
-    console.log("EL PROYECTOOOO", latestProject[0]);
-    return latestProject[0];
+        // Obtener el proyecto más reciente cuya fecha de inicio ya haya pasado.
+        // Esto evita que un proyecto creado anticipadamente (ej. el día 21 para el
+        // mes siguiente) desplace al proyecto del mes en curso.
+        const projects = await OdooService.searchRead(
+            'project.project',
+            [['date_start', '<=', todayStr]],
+            ['id', 'display_name', 'date_start'],
+            1, 0, 'date_start desc'
+        );
+
+        return projects[0] || null;
+    } catch (e) {
+        console.error('Error obteniendo proyecto actual:', e);
+        return null;
+    }
 }
