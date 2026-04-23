@@ -17,10 +17,8 @@ class SyncService {
 
   async syncAll() {
     try {
-      // 1. Sincronizo Maestros y detecta cambio
       const { projectChanged, oldProject } = await this.syncMasterData();
 
-      // 2. Lógica del 25 con persistencia
       const now = new Date();
       const dayOfMonth = now.getDate();
       const isLateMonth = dayOfMonth > 25;
@@ -28,15 +26,11 @@ class SyncService {
       let projectToKeepId = null;
 
       if (isLateMonth) {
-        // Esta en periodo de transición (> día 25)
-
         if (projectChanged && oldProject) {
-            // A: Acaba de cambiar el proyecto. Guardo el viejo para el futuro
             console.log(`📅 Cambio post-día 25. Guardando ID proyecto anterior: ${oldProject.display_name}`);
             await StorageService.setItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID, oldProject.id);
             projectToKeepId = oldProject.id;
         } else {
-            // B: No cambió AHORA, pero verifica si hay uno guardado de un sync anterior
             const savedPrevId = await StorageService.getItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID);
             if (savedPrevId) {
                 console.log(`📅 Manteniendo tareas del proyecto anterior (Persistido ID: ${savedPrevId})`);
@@ -44,17 +38,13 @@ class SyncService {
             }
         }
       } else {
-        // Esta antes del día 25 (ej. día 10). Se acabó el periodo de gracia
-        // Borra el ID guardado y limpia caché si hubo cambio.
         await StorageService.removeItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID);
-
         if (projectChanged) {
             console.log('🧹 Cambio de proyecto estándar (<= día 25). Limpiando caché antigua...');
             await this.clearProjectCacheSafe();
         }
       }
 
-      // 3. Enviar Pendientes
       try {
         await this.syncPendingChanges();
         console.log('✅ Cambios pendientes enviados');
@@ -62,10 +52,9 @@ class SyncService {
         console.warn('⚠️ Error en cambios pendientes (continuando):', pendingError);
       }
 
-      // 4. Sincronizar Entidades
       const [clientsResult, tasksResult, leadsResult] = await Promise.all([
         this.syncClients(),
-        this.syncTasks(projectToKeepId), // PASo EL ID VIEJO SI APLICA
+        this.syncTasks(projectToKeepId),
         this.syncLeads() 
       ]);
 
@@ -73,7 +62,6 @@ class SyncService {
       const surveysResult = await this.syncSurveys();
       await this.syncAttachments();
 
-      // Guardar timestamp
       try {
         await StorageService.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
       } catch (e) {}
@@ -93,7 +81,7 @@ class SyncService {
   }
 
   // Comentarios
-  async getTaskComments(...args) {return Comments.getTaskComments(...args); }
+  async getTaskComments(...args) { return Comments.getTaskComments(...args); }
   async createCommentLocally(...args) { return Comments.createCommentLocally(...args); }
 
   // Encuestas
@@ -122,11 +110,9 @@ class SyncService {
   // Tareas
   async createTaskLocally(taskData) { return Tasks.createTaskLocally(taskData); }
   async updateTaskLocally(taskId, updates, opts) { return Tasks.updateTaskLocally(taskId, updates, opts); }
-  async getSurveysForTask(taskId) {return Surveys.getSurveysForTask(taskId); }
- async syncTasks(extraProjectId) {
+  async getSurveysForTask(taskId) { return Surveys.getSurveysForTask(taskId); }
+  async syncTasks(extraProjectId) {
     const result = await Tasks.syncTasks(extraProjectId);
-    // Después de escribir las tareas del proyecto en TASKS, purgar del cache extendido
-    // cualquier tarea con el mismo ID para que nunca sean tratadas como históricas.
     if (result?.subtasks?.length) {
       await Tasks.purgeExtendedTasksWithIds(result.subtasks.map(t => t.id));
     }
@@ -145,6 +131,8 @@ class SyncService {
   // Clientes
   async syncClients() { return Clients.syncClients(); }
   async getLocalClients() { return Clients.getLocalClients(); }
+  /** Sólo los clientes del usuario autenticado (para asignación en tareas/leads). */
+  async getOwnClients() { return Clients.getOwnClients(); }
   async getLocalMacrotasks() { return Clients.getLocalMacrotasks(); }
   async getLocalSubtasks() { return Clients.getLocalSubtasks(); }
   async getLastSyncDate() { return Clients.getLastSyncDate(); }
@@ -155,7 +143,7 @@ class SyncService {
   async getLocalLeads() { return Leads.getLocalLeads(); }
   async createLeadLocally(leadData) { return Leads.createLeadLocally(leadData); }
   async updateLeadLocally(leadId, updates, opts) { return Leads.updateLeadLocally(leadId, updates, opts); }
-  async deleteLeadLocally(leadId) { return Leads.deleteLeadLocally(leadId); } // 🔥 NUEVO
+  async deleteLeadLocally(leadId) { return Leads.deleteLeadLocally(leadId); }
   async getLeadTasks(leadId) { return Leads.getLeadTasks(leadId); }
   async associateTaskToLead(leadId, taskId) { return Leads.associateTaskToLead(leadId, taskId); }
   async getLeadsStatsByStage() { return Leads.getLeadsStatsByStage(); }
@@ -170,12 +158,12 @@ class SyncService {
   async getCurrentProject() { return Session.getCurrentProject(); }
 
   // Adjuntos
-  async syncAttachments() {return Attachments.syncAttachments(); }
-  async getTaskAttachments(taskId) {return Attachments.getTaskAttachments(taskId); }
-  async downloadAttachment(attachmentId) {return Attachments.downloadAttachment(attachmentId); }
-  async uploadAttachment(...args) {return Attachments.uploadAttachment(...args); }
-  async deleteAttachment(attachmentId) {return Attachments.deleteAttachment(attachmentId); }
-  async clearAttachmentsCache() {return Attachments.clearAttachmentsCache(); }
+  async syncAttachments() { return Attachments.syncAttachments(); }
+  async getTaskAttachments(taskId) { return Attachments.getTaskAttachments(taskId); }
+  async downloadAttachment(attachmentId) { return Attachments.downloadAttachment(attachmentId); }
+  async uploadAttachment(...args) { return Attachments.uploadAttachment(...args); }
+  async deleteAttachment(attachmentId) { return Attachments.deleteAttachment(attachmentId); }
+  async clearAttachmentsCache() { return Attachments.clearAttachmentsCache(); }
 
   async clearProjectCacheSafe() {
     try {
@@ -210,7 +198,6 @@ class SyncService {
   async clearProjectData() {
     try {
       await this.syncPendingChanges();
-
       await StorageService.removeItem(STORAGE_KEYS.TASKS);
       await StorageService.removeItem(STORAGE_KEYS.MACROTASKS);
       await StorageService.removeItem(STORAGE_KEYS.PENDING_CHANGES);
@@ -222,13 +209,13 @@ class SyncService {
       console.error(' Error limpiando caché de proyecto:', error);
     }
   }
-  async purgeExtendedTasksWithIds(ids)            { return Tasks.purgeExtendedTasksWithIds(ids); }
-  async fetchAndCacheTasksForRange(from, to)      { return Tasks.fetchAndCacheTasksForRange(from, to); }
-  async getExtendedTasks()                        { return Tasks.getExtendedTasks(); }
-  async cleanExpiredExtendedTasks()               { return Tasks.cleanExpiredExtendedTasks(); }
-  async touchBatchForTask(taskId)                 { return Tasks.touchBatchForTask(taskId); }
-  async updateExtendedTaskLocally(id, updates)    { return Tasks.updateExtendedTaskLocally(id, updates); }
- 
+
+  async purgeExtendedTasksWithIds(ids)         { return Tasks.purgeExtendedTasksWithIds(ids); }
+  async fetchAndCacheTasksForRange(from, to)   { return Tasks.fetchAndCacheTasksForRange(from, to); }
+  async getExtendedTasks()                     { return Tasks.getExtendedTasks(); }
+  async cleanExpiredExtendedTasks()            { return Tasks.cleanExpiredExtendedTasks(); }
+  async touchBatchForTask(taskId)              { return Tasks.touchBatchForTask(taskId); }
+  async updateExtendedTaskLocally(id, updates) { return Tasks.updateExtendedTaskLocally(id, updates); }
 }
 
 export default new SyncService();

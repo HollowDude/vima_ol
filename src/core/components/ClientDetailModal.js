@@ -21,11 +21,11 @@ import SyncService from '../sync/sync.service';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import SelectionModal from './SelectionModal'; 
 import validators from '../utils/validators';
+import OdooService from '../api/odoo.service';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const MODAL_HEIGHT = SCREEN_HEIGHT * 0.9;
 
-// Opciones estáticas para el tipo de compañía
 const COMPANY_TYPE_OPTIONS = [
   { id: 'person', name: 'Persona Individual' },
   { id: 'company', name: 'Compañía / Empresa' },
@@ -78,7 +78,6 @@ const InfoRow = ({ icon, label, value, onPress, isLink }) => {
   if (Array.isArray(value)) displayValue = value[1] || '-';
   if (typeof value === 'boolean') displayValue = value ? 'Sí' : '';
   
-  // Traducción visual rápida para company_type si es necesario
   if (label === 'Tipo de Entidad') {
       displayValue = value === 'company' ? 'Compañía' : 'Persona Individual';
   }
@@ -168,6 +167,13 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const panY = useRef(new Animated.Value(0)).current;
 
+  // ── ¿Es un cliente propio? ──────────────────────────────────────────────────
+  const isOwnClient = (() => {
+    const data = displayClient || client;
+    if (!data) return false;
+    const clientUserId = Array.isArray(data.user_id) ? data.user_id[0] : data.user_id;
+    return clientUserId === OdooService.uid;
+  })();
 
   useEffect(() => {
     if (client) resetForm(client);
@@ -197,7 +203,7 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
     setDisplayClient(data);
     
     setName(data.name || '');
-    setCompanyType(data.company_type || 'person'); // Inicializar company_type
+    setCompanyType(data.company_type || 'person');
     setContactPerson(data.contact_person || '');
     setVat(data.vat || '');
     setClassification(data.desc_primary_classification || '');
@@ -207,13 +213,11 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
     setPhone(data.phone || '');
     setMobile(data.mobile || '');
     
-    // Relacionales
     setSelectedMunicipality(Array.isArray(data.municipality) ? { id: data.municipality[0], name: data.municipality[1] } : null);
     setSelectedState(Array.isArray(data.state_id) ? { id: data.state_id[0], name: data.state_id[1] } : null);
     setSelectedCountry(Array.isArray(data.country_id) ? { id: data.country_id[0], name: data.country_id[1] } : null);
     setClientTypeIds(Array.isArray(data.client_type) ? data.client_type : []);
     
-    // Otros
     setSCustomerRoute(Array.isArray(data.customer_route) ? data.customer_route[1] : data.customer_route || '');
     setSSocialReason(data.social_reason || '');
     setSAgent(Array.isArray(data.agent) ? data.agent[1] : data.agent || '');
@@ -224,7 +228,6 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
     setSContract(!!data.contract); 
     setSShippingAddressNumber(data.shipping_address_number || '');
 
-    // Geolocalización
     setLatitude(data.partner_latitude || 0);
     setLongitude(data.partner_longitude || 0);
     setDateLocalization(data.date_localization || '');
@@ -235,21 +238,17 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
   function handlePhoneChange(text) {
     const formatted = validators.formatPhoneForDisplay(text);
     setErrors(prev => ({ ...prev, phone: validators.isValidPhoneValue(formatted) ? '' : 'El teléfono debe tener 8 dígitos.' }));
-
     setPhone(formatted);
   }
 
   function handleMobileChange(text) {
-    const formatted = validators.formatMobileForDisplay(text)
+    const formatted = validators.formatMobileForDisplay(text);
     setErrors(prev => ({ ...prev, mobile: validators.isValidMobileValue(formatted) ? '' : 'El móvil debe tener código de país y 8 dígitos (ej. +53 1234 5678).' }));
-    
     setMobile(formatted);
   }
 
   function handleEmailChange(text) {
     setErrors(prev => ({ ...prev, email: validators.isValidEmailValue(text) ? '' : 'Email inválido (se requiere @).' }));
-    
-    
     setEmail(text);
   }
 
@@ -260,7 +259,6 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
 
   const handleSave = async () => {
     try {
-
       if (errors.phone || errors.mobile || errors.email) {
         Alert.alert('Errores en el formulario', [errors.phone, errors.mobile, errors.email].filter(Boolean).join('\n'));
         return;
@@ -281,7 +279,6 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
         state_id: selectedState ? [selectedState.id, selectedState.name] : false,
         country_id: selectedCountry ? [selectedCountry.id, selectedCountry.name] : false,
         client_type: clientTypeIds, 
-        
         customer_route: s_customerRoute,
         social_reason: s_socialReason,
         agent: s_agent,
@@ -291,8 +288,6 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
         warehouse_area: s_warehouseArea,
         contract: s_contract, 
         shipping_address_number: s_shippingAddressNumber,
-
-        // Geo
         partner_latitude: latitude,
         partner_longitude: longitude,
         date_localization: dateLocalization,
@@ -326,7 +321,6 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
       }
       
       const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      
       const now = new Date();
       const dateString = now.toISOString().split('T')[0];
 
@@ -341,7 +335,6 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
       };
       
       const updatedClient = await SyncService.updateClientLocally(displayClient.id, updates);
-      
       setDisplayClient(updatedClient);
       await SyncService.addPendingChange('res.partner', displayClient.id, updates);
       
@@ -354,16 +347,12 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
     }
   };
 
-  // --- ANIMACIONES Y UI ---
-
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderMove: (_, gestureState) => {
-        if (gestureState.dy > 0) {
-          panY.setValue(gestureState.dy);
-        }
+        if (gestureState.dy > 0) panY.setValue(gestureState.dy);
       },
       onPanResponderRelease: (_, gestureState) => {
         if (gestureState.dy > 100) {
@@ -459,10 +448,6 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
     );
   };
 
-  // --------------------------------------------------------------------------------------
-  // LÓGICA DE FILTRADO Y SELECCIÓN
-  // --------------------------------------------------------------------------------------
-
   const getModalData = () => {
     if (modalType === 'country') return masterCountries;
     if (modalType === 'state') {
@@ -482,9 +467,7 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
       return masterMunicipalities; 
     }
     if (modalType === 'client_type') return masterClientTypes;
-    
     if (modalType === 'company_type_option') return COMPANY_TYPE_OPTIONS;
-
     return [];
   };
 
@@ -521,7 +504,6 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
   if (!data) return null;
 
   const hasCoordinates = latitude && longitude && latitude !== 0;
-
   const avatarIcon = companyType === 'company' ? 'briefcase' : 'user';
 
   return (
@@ -548,7 +530,6 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
           >
             <View style={styles.headerContent}>
               <View style={styles.avatar}>
-                {/* ICONO DINÁMICO */}
                 <Feather name={avatarIcon} size={32} color="#64c27b" />
               </View>
               <Text style={styles.name}>{editing ? 'Editando Cliente' : (data.name || 'Sin nombre')}</Text>
@@ -557,13 +538,21 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
                     {data.company_type === 'company' ? 'Compañía' : 'Persona Individual'}
                  </Text>
               )}
+              {/* Badge "No editable" para clientes ajenos */}
+              {!isOwnClient && (
+                <View style={styles.readOnlyBadge}>
+                  <Feather name="lock" size={11} color="#9CA3AF" />
+                  <Text style={styles.readOnlyBadgeText}>Solo lectura</Text>
+                </View>
+              )}
             </View>
 
             <View style={styles.divider} />
 
+            {/* SECCIÓN 1: INFORMACIÓN COMERCIAL — editable solo si es propio */}
             <SectionTitle 
               title="Información Comercial" 
-              editable 
+              editable={isOwnClient}
               isEditing={editing}
               onToggleEdit={() => editing ? handleSave() : setEditing(true)}
               onCancel={handleCancelEdit}
@@ -572,17 +561,14 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
             {editing ? (
               <>
                 <InputField label="Nombre / Razón Social" value={name} onChangeText={setName} placeholder="Nombre del cliente" />
-                
                 <SelectorField 
                     label="Tipo de Entidad" 
                     value={companyType === 'company' ? {name: 'Compañía / Empresa'} : {name: 'Persona Individual'}} 
                     onPress={() => setModalType('company_type_option')}
                 />
-
                 <InputField label="Persona de Contacto" value={contactPerson} onChangeText={setContactPerson} placeholder="Nombre del contacto" />
                 <InputField label="NIF / CIF" value={vat} onChangeText={setVat} placeholder="B-12345678" />
                 <InputField label="Clasificación Primaria" value={classification} onChangeText={setClassification} placeholder="Ej. Tienda, Distribuidor..." />
-                
                 <View style={styles.editableField}>
                     <Text style={styles.editableLabel}>Tipo de Cliente</Text>
                     {renderClientTypeChips()}
@@ -610,7 +596,6 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
               <>
                 <InputField label="Dirección 1" value={street} onChangeText={setStreet} placeholder="Calle, número..." />
                 <InputField label="Dirección 2" value={street2} onChangeText={setStreet2} placeholder="Piso, puerta..." />
-                
                 <SelectorField label="País" value={selectedCountry} placeholder="Seleccionar País" onPress={() => setModalType('country')} />
                 <SelectorField label="Provincia" value={selectedState} placeholder="Seleccionar Provincia" onPress={() => setModalType('state')} />
                 <SelectorField label="Municipio" value={selectedMunicipality} placeholder="Seleccionar Municipio" onPress={() => setModalType('municipality')} />
@@ -654,7 +639,6 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
                 label="Fecha Localización" 
                 value={dateLocalization}
             />
-
             <InfoRow 
                 icon="map" 
                 label="Coordenadas" 
@@ -663,23 +647,26 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
                 isLink
             />
             
-            <TouchableOpacity style={styles.geoButton} onPress={handleCaptureLocation} disabled={capturing}>
-                {capturing ? <ActivityIndicator color="#fff" /> : (
-                    <>
-                        <Feather name={editing && hasCoordinates ? "refresh-cw" : "target"} size={18} color="#fff" />
-                        <Text style={styles.geoButtonText}>
-                          {editing && hasCoordinates ? "Actualizar Ubicación GPS" : "Capturar Ubicación GPS"}
-                        </Text>
-                    </>
-                )}
-            </TouchableOpacity>
+            {/* Captura GPS sólo para clientes propios */}
+            {isOwnClient && (
+              <TouchableOpacity style={styles.geoButton} onPress={handleCaptureLocation} disabled={capturing}>
+                  {capturing ? <ActivityIndicator color="#fff" /> : (
+                      <>
+                          <Feather name={editing && hasCoordinates ? "refresh-cw" : "target"} size={18} color="#fff" />
+                          <Text style={styles.geoButtonText}>
+                            {editing && hasCoordinates ? "Actualizar Ubicación GPS" : "Capturar Ubicación GPS"}
+                          </Text>
+                      </>
+                  )}
+              </TouchableOpacity>
+            )}
 
             <View style={styles.divider} />
 
-            {/* SECCIÓN 5: OTRA INFORMACIÓN */}
+            {/* SECCIÓN 5: OTRA INFORMACIÓN — editable solo si es propio */}
             <SectionTitle 
               title="Otra Información" 
-              editable 
+              editable={isOwnClient}
               isEditing={editing}
               onToggleEdit={() => editing ? handleSave() : setEditing(true)}
               onCancel={handleCancelEdit}
@@ -695,7 +682,6 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
                     <InputField label="Forma de Entrega (Incoterm)" value={s_deliveryMethod} onChangeText={setSDeliveryMethod} placeholder="Forma de entrega" />
                     <InputField label="Transporte Propio o VIMA" value={s_typeTransport} onChangeText={setSTypeTransport} placeholder="Tipo de transporte" />
                     <InputField label="Zona Almacén Cliente" value={s_warehouseArea} onChangeText={setSWarehouseArea} placeholder="Zona de almacén" />
-                    
                     <BooleanSwitchField label="Cliente con Contrato" value={s_contract} onToggle={setSContract} />
                 </>
             ) : (
@@ -720,7 +706,6 @@ export default function ClientDetailModal({ visible, client, onClose, onClientUp
           </KeyboardAwareScrollView>
         </Animated.View>
 
-        {/* Modal de Selección con datos filtrados */}
         {modalType && (
             <SelectionModal
                 visible={!!modalType}
@@ -754,7 +739,22 @@ const styles = StyleSheet.create({
   name: { fontSize: 22, fontWeight: '700', color: '#111827', textAlign: 'center' },
   divider: { height: 1, backgroundColor: '#F3F4F6', marginBottom: 24 },
 
-  // Scroll
+  readOnlyBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginTop: 8,
+  },
+  readOnlyBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#9CA3AF',
+  },
+
   scrollContainer: { flex: 1, backgroundColor: '#fff' },
   scrollContent: { padding: 24, paddingTop: 10 },
   
@@ -780,7 +780,6 @@ const styles = StyleSheet.create({
   selectorText: { fontSize: 15, color: '#1F2937' },
   placeholderText: { color: '#9CA3AF' },
 
-  // Chips
   chipContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#64c27b', paddingVertical: 4, paddingHorizontal: 10, borderRadius: 16 },
   chipText: { color: '#fff', fontSize: 13, fontWeight: '500', marginRight: 4 },
@@ -788,7 +787,6 @@ const styles = StyleSheet.create({
   addChipButton: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4, paddingHorizontal: 10, borderRadius: 16, borderWidth: 1, borderColor: '#64c27b', borderStyle: 'dashed' },
   addChipText: { color: '#64c27b', fontSize: 13, fontWeight: '500', marginLeft: 4 },
 
-  // Geo
   geoButton: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', backgroundColor: '#64c27b', paddingVertical: 12, borderRadius: 8, marginTop: 16 },
   geoButtonText: { color: '#fff', fontSize: 16, fontWeight: '600', marginLeft: 8 },
 });

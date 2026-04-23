@@ -17,6 +17,7 @@ import useSyncActions from '../../../core/hooks/useSyncActions';
 import SyncService from '../../../core/sync/sync.service';
 import { useSyncContext } from '../../../core/context/SyncContext';
 import { usePrevious } from '../../../core/hooks/usePrevious';
+import OdooService from '../../../core/api/odoo.service';
 
 export default function ClientsScreen({ userData, username, onBack, onLogout }) {
   const { isOnline }            = useNetwork();
@@ -30,26 +31,26 @@ export default function ClientsScreen({ userData, username, onBack, onLogout }) 
   const [searchQuery, setSearchQuery]           = useState('');
   const [loading, setLoading]                   = useState(false);
   const [menuVisible, setMenuVisible]           = useState(false);
+  // true = sólo mis clientes, false = todos
+  const [showOnlyOwn, setShowOnlyOwn]           = useState(true);
 
   const prevOnline = usePrevious(isOnline);
 
   useEffect(() => { loadClients(); }, []);
 
-  // Auto-sync al reconectar
   useEffect(() => {
     if (prevOnline === false && isOnline === true) {
       syncAll().then(() => loadClients());
     }
   }, [isOnline, prevOnline]);
 
-  useEffect(() => { filterClients(); }, [searchQuery, clients]);
+  useEffect(() => { filterClients(); }, [searchQuery, clients, showOnlyOwn]);
 
   const loadClients = async () => {
     try {
       setLoading(true);
       const local = await SyncService.getLocalClients();
       setClients(local);
-      setFilteredClients(local);
     } catch (e) {
       console.error('❌ Error cargando clientes:', e);
     } finally {
@@ -57,7 +58,6 @@ export default function ClientsScreen({ userData, username, onBack, onLogout }) 
     }
   };
 
-  // FIX: sube pendientes primero, luego descarga
   const handleRefresh = async () => {
     if (!isOnline) { Alert.alert('Sin conexión', 'Necesitas internet para sincronizar'); return; }
     try {
@@ -70,34 +70,52 @@ export default function ClientsScreen({ userData, username, onBack, onLogout }) 
   };
 
   const filterClients = () => {
-    if (!searchQuery.trim()) { setFilteredClients(clients); return; }
-    const q = searchQuery.toLowerCase();
-    setFilteredClients(clients.filter(c =>
-      (c.name   || '').toLowerCase().includes(q) ||
-      (c.email  || '').toLowerCase().includes(q) ||
-      (c.phone  || '').includes(q) ||
-      (c.mobile || '').includes(q)
-    ));
+    const currentUserId = OdooService.uid;
+
+    let base = clients;
+
+    // Filtro propio / todos
+    if (showOnlyOwn) {
+      base = base.filter(c => {
+        const clientUserId = Array.isArray(c.user_id) ? c.user_id[0] : c.user_id;
+        return clientUserId === currentUserId;
+      });
+    }
+
+    // Filtro de búsqueda
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      base = base.filter(c =>
+        (c.name   || '').toLowerCase().includes(q) ||
+        (c.email  || '').toLowerCase().includes(q) ||
+        (c.phone  || '').includes(q) ||
+        (c.mobile || '').includes(q)
+      );
+    }
+
+    setFilteredClients(base);
   };
 
-  const handleCloseClientModal = async (updated) => {
+  const handleCloseClientModal = async () => {
     setSelectedClient(null);
-    // Verificar si el modal dejó cambios pendientes y actualizar el header
     await refreshPendingCount();
   };
 
   const handleClientUpdated = (updated) => {
     const upd = list => list.map(c => c.id === updated.id ? updated : c);
     setClients(upd);
-    setFilteredClients(upd);
   };
 
-  // FAB: principal expande opciones, menu abre sidebar, arrow-left vuelve
   const fabActions = [
-    { icon: 'more-vertical', onPress: () => {}                        },
-    { icon: 'menu',          onPress: () => setMenuVisible(true)      },
-    { icon: 'arrow-left',    onPress: onBack                          },
+    { icon: 'more-vertical', onPress: () => {}                   },
+    { icon: 'menu',          onPress: () => setMenuVisible(true) },
+    { icon: 'arrow-left',    onPress: onBack                     },
   ];
+
+  const ownCount = clients.filter(c => {
+    const uid = Array.isArray(c.user_id) ? c.user_id[0] : c.user_id;
+    return uid === OdooService.uid;
+  }).length;
 
   return (
     <SafeAreaProvider style={styles.safeArea}>
@@ -123,10 +141,35 @@ export default function ClientsScreen({ userData, username, onBack, onLogout }) 
           }
         >
           <Card style={styles.mainCard}>
-            {/* Header usa SyncContext internamente */}
             <DashboardHeader userName={username || 'Usuario'} isOnline={isOnline} />
 
             <View style={styles.content}>
+
+              {/* ── Toggle Mis clientes / Todos ── */}
+              <View style={styles.toggleRow}>
+                <TouchableOpacity
+                  style={[styles.toggleBtn, showOnlyOwn && styles.toggleBtnActive]}
+                  onPress={() => setShowOnlyOwn(true)}
+                  activeOpacity={0.8}
+                >
+                  <Feather name="user-check" size={13} color={showOnlyOwn ? '#fff' : '#9CA3AF'} />
+                  <Text style={[styles.toggleBtnTxt, showOnlyOwn && styles.toggleBtnTxtActive]}>
+                    Mis clientes ({ownCount})
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.toggleBtn, !showOnlyOwn && styles.toggleBtnActive]}
+                  onPress={() => setShowOnlyOwn(false)}
+                  activeOpacity={0.8}
+                >
+                  <Feather name="users" size={13} color={!showOnlyOwn ? '#fff' : '#9CA3AF'} />
+                  <Text style={[styles.toggleBtnTxt, !showOnlyOwn && styles.toggleBtnTxtActive]}>
+                    Todos ({clients.length})
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
               {/* Buscador */}
               <View style={styles.searchContainer}>
                 <Feather name="search" size={18} color="#9CA3AF" style={styles.searchIcon} />
@@ -195,6 +238,42 @@ const styles = StyleSheet.create({
   scrollContent: { padding: 16, paddingTop: 80 },
   mainCard:      { marginBottom: 16 },
   content:       { padding: 16 },
+
+  // Toggle
+  toggleRow: {
+    flexDirection: 'row',
+    backgroundColor: '#f3f4f6',
+    borderRadius: 8,
+    padding: 3,
+    marginBottom: 14,
+  },
+  toggleBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    gap: 6,
+  },
+  toggleBtnActive: {
+    backgroundColor: '#64c27b',
+    shadowColor: '#64c27b',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  toggleBtnTxt: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#9CA3AF',
+  },
+  toggleBtnTxtActive: {
+    color: '#fff',
+  },
+
   searchContainer: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: '#f3f4f6', borderRadius: 8,
