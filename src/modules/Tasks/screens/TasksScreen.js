@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions,
-  RefreshControl, Alert, Modal, FlatList, ActivityIndicator,
+  RefreshControl, Alert, Modal, FlatList, ActivityIndicator, TextInput,
 } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
@@ -18,14 +18,31 @@ import useSyncActions from '../../../core/hooks/useSyncActions';
 import SyncService from '../../../core/sync/sync.service';
 import { usePrevious } from '../../../core/hooks/usePrevious';
 
-// ─── Constantes ───────────────────────────────────────────────────────────────
-const HOURS            = Array.from({ length: 24 }, (_, i) => i);
-const BASE_HOUR_HEIGHT = 80;
-const MIN_ZOOM         = 0.5;
-const MAX_ZOOM         = 2;
-const DAY_WIDTH        = 120;
+// ─── Constants ────────────────────────────────────────────────────────────────
+const HOURS             = Array.from({ length: 24 }, (_, i) => i);
+const BASE_HOUR_HEIGHT  = 80;
+const MIN_ZOOM          = 0.5;
+const MAX_ZOOM          = 2;
+const DAY_WIDTH         = 120;
 const INITIAL_PAST_DAYS   = 3;
 const INITIAL_FUTURE_DAYS = 3;
+const PAGE_SIZE           = 50;
+
+/** States that a project.task can be in, in display order. */
+const TASK_STATES = [
+  { id: '01_in_progress',       label: 'En Proceso',     color: '#64c27b', icon: 'play'        },
+  { id: '02_changes_requested', label: 'Cambios Solic.', color: '#F59E0B', icon: 'alert-circle' },
+  { id: '03_approved',          label: 'Aprobado',       color: '#10B981', icon: 'check-circle' },
+  { id: '04_waiting_normal',    label: 'En Espera',      color: '#9CA3AF', icon: 'clock'        },
+  { id: '1_done',               label: 'Hecho',          color: '#22c55e', icon: 'check'        },
+  { id: '1_canceled',           label: 'Cancelado',      color: '#EF4444', icon: 'x-circle'     },
+];
+
+const PRIORITY_OPTS = [
+  { id: 'alta',  label: 'Alta',  color: '#EF4444', icon: 'alert-triangle' },
+  { id: 'media', label: 'Media', color: '#F59E0B', icon: 'minus'          },
+  { id: 'baja',  label: 'Baja',  color: '#64c27b', icon: 'chevron-down'   },
+];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const getLocalDateString = (date) => {
@@ -35,25 +52,151 @@ const getLocalDateString = (date) => {
   return `${y}-${m}-${d}`;
 };
 
-/**
- * Devuelve el último día del mes al que pertenece dateStr.
- * Ej: '2026-04-01' → Date(2026-04-30)
- */
 const getEndOfMonthDate = (dateStr) => {
   const d = new Date(dateStr);
   return new Date(d.getFullYear(), d.getMonth() + 1, 0);
 };
 
-/**
- * Formatea 'YYYY-MM-DD' a texto legible en español.
- * Ej: '2026-01-06' → '6 de enero de 2026'
- */
 const formatDateStr = (dateStr) => {
   const [y, m, d] = dateStr.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString('es-ES', {
     day: '2-digit', month: 'long', year: 'numeric',
   });
 };
+
+const parseDeadline = (dateStr) => {
+  if (!dateStr) return null;
+  let s = dateStr.replace(' ', 'T');
+  if (!s.endsWith('Z')) s += 'Z';
+  return new Date(s);
+};
+
+// ─── TaskListItem ─────────────────────────────────────────────────────────────
+function TaskListItem({ task, tags, currentUserId, isHistorical, onPress }) {
+  const stateInfo  = TASK_STATES.find(s => s.id === task.state) || TASK_STATES[0];
+  const pColors    = { alta: '#EF4444', media: '#F59E0B', baja: '#64c27b' };
+  const pColor     = pColors[task.priority_level] || '#D1D5DB';
+  const clientName = Array.isArray(task.partner_id) ? task.partner_id[1] : null;
+  const userIds    = Array.isArray(task.user_ids) ? task.user_ids : [];
+  const isMine     = userIds.includes(Number(currentUserId));
+  const userLabel  = userIds.length === 0
+    ? null
+    : userIds.length === 1 && isMine ? 'Yo'
+    : isMine                          ? `Yo +${userIds.length - 1}`
+    :                                   `${userIds.length} asig.`;
+
+  const deadline   = parseDeadline(task.date_deadline);
+  const isOverdue  = deadline && deadline < new Date()
+    && task.state !== '1_done'
+    && task.state !== '1_canceled';
+  const deadlineStr = deadline
+    ? deadline.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })
+    : null;
+
+  const taskTags  = tags.filter(t =>
+    Array.isArray(task.management_tags) && task.management_tags.includes(t.id),
+  );
+  const isDone = task.state === '1_done';
+
+  return (
+    <TouchableOpacity
+      style={[styles.listItem, isDone && styles.listItemDone]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      {/* Priority stripe */}
+      <View style={[styles.listItemStripe, { backgroundColor: pColor }]} />
+
+      <View style={styles.listItemBody}>
+        {/* Row 1 — title + historical badge */}
+        <View style={styles.listItemTitleRow}>
+          <Text
+            style={[styles.listItemTitle, isDone && styles.listItemTitleDone]}
+            numberOfLines={2}
+          >
+            {task.display_name || task.name}
+          </Text>
+          {isHistorical && (
+            <View style={styles.listHistBadge}>
+              <Feather name="archive" size={9} color="#92400E" />
+            </View>
+          )}
+        </View>
+
+        {/* Row 2 — meta chips: client, users, deadline */}
+        <View style={styles.listItemMeta}>
+          {clientName && (
+            <View style={styles.listMetaChip}>
+              <Feather name="user" size={11} color="#9CA3AF" />
+              <Text style={styles.listMetaText} numberOfLines={1}>{clientName}</Text>
+            </View>
+          )}
+          {userLabel && (
+            <View style={styles.listMetaChip}>
+              <Feather name="users" size={11} color="#9CA3AF" />
+              <Text style={styles.listMetaText}>{userLabel}</Text>
+            </View>
+          )}
+          {deadlineStr && (
+            <View style={styles.listMetaChip}>
+              <Feather
+                name="clock"
+                size={11}
+                color={isOverdue ? '#EF4444' : '#9CA3AF'}
+              />
+              <Text style={[styles.listMetaText, isOverdue && styles.listMetaOverdue]}>
+                {deadlineStr}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* Row 3 — tag chips */}
+        {taskTags.length > 0 && (
+          <View style={styles.listTagsRow}>
+            {taskTags.slice(0, 3).map(tag => (
+              <View key={tag.id} style={styles.listTag}>
+                <Text style={styles.listTagText}>{tag.name}</Text>
+              </View>
+            ))}
+            {taskTags.length > 3 && (
+              <Text style={styles.listTagMore}>+{taskTags.length - 3}</Text>
+            )}
+          </View>
+        )}
+      </View>
+
+      {/* State icon badge */}
+      <View style={[styles.listItemStateIcon, { backgroundColor: stateInfo.color + '18' }]}>
+        <Feather name={stateInfo.icon} size={14} color={stateInfo.color} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+// ─── StateGroupHeader ─────────────────────────────────────────────────────────
+function StateGroupHeader({ stateInfo, count, collapsed, onToggle }) {
+  return (
+    <TouchableOpacity
+      style={[styles.groupHeader, { borderLeftColor: stateInfo.color }]}
+      onPress={onToggle}
+      activeOpacity={0.7}
+    >
+      <View style={styles.groupHeaderLeft}>
+        <View style={[styles.groupDot, { backgroundColor: stateInfo.color }]} />
+        <Text style={styles.groupHeaderLabel}>{stateInfo.label}</Text>
+        <View style={[styles.groupCountBadge, { backgroundColor: stateInfo.color + '20' }]}>
+          <Text style={[styles.groupCountText, { color: stateInfo.color }]}>{count}</Text>
+        </View>
+      </View>
+      <Feather
+        name={collapsed ? 'chevron-right' : 'chevron-down'}
+        size={17}
+        color="#9CA3AF"
+      />
+    </TouchableOpacity>
+  );
+}
 
 // ─── DayTasksModal ─────────────────────────────────────────────────────────────
 function DayTasksModal({ visible, date, tasks, onClose, onSelectTask }) {
@@ -84,7 +227,7 @@ function DayTasksModal({ visible, date, tasks, onClose, onSelectTask }) {
               const tDate = item.date_deadline
                 ? new Date(
                     item.date_deadline.replace(' ', 'T') +
-                    (item.date_deadline.includes('Z') ? '' : 'Z')
+                    (item.date_deadline.includes('Z') ? '' : 'Z'),
                   )
                 : new Date();
               const timeStr = tDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
@@ -98,7 +241,10 @@ function DayTasksModal({ visible, date, tasks, onClose, onSelectTask }) {
                     <Feather name="clock" size={14} color="#6B7280" />
                     <Text style={styles.dayTaskTimeText}>{timeStr}</Text>
                   </View>
-                  <Text style={[styles.dayTaskTitle, isDone && styles.dayTaskTitleDone]} numberOfLines={2}>
+                  <Text
+                    style={[styles.dayTaskTitle, isDone && styles.dayTaskTitleDone]}
+                    numberOfLines={2}
+                  >
                     {item.display_name}
                   </Text>
                   {item.partner_id && (
@@ -134,7 +280,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   const scrollViewRef           = useRef(null);
   const scrollXRef              = useRef(0);
 
-  // ── Estado general ──────────────────────────────────────────────────────────
+  // ── State general ────────────────────────────────────────────────────────────
   const [selectedTask, setSelectedTask]         = useState(null);
   const [isCreateModalVisible, setCreateModal]  = useState(false);
   const [menuVisible, setMenuVisible]           = useState(false);
@@ -145,67 +291,89 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   const [allTasks, setAllTasks]                 = useState([]);
   const [projectId, setProjectId]               = useState(null);
   const [zoomLevel, setZoomLevel]               = useState(1);
+  const [managementTags, setManagementTags]     = useState([]);
 
-  // ── Días cargados ────────────────────────────────────────────────────────────
+  // ── View mode ────────────────────────────────────────────────────────────────
+  const [viewMode, setViewMode] = useState('calendar'); // 'calendar' | 'list'
+
+  // ── List view filters ────────────────────────────────────────────────────────
+  const [listStateFilter,   setListStateFilter]   = useState(null);
+  const [listCollapsed,     setListCollapsed]      = useState({});
+  const [listSearch,        setListSearch]         = useState('');
+  const [listSearchVisible, setListSearchVisible]  = useState(false);
+  const [listPriorityFilter,setListPriorityFilter] = useState(null);
+  const [listTagFilter,     setListTagFilter]      = useState(null);
+  const [listVisibleCount,  setListVisibleCount]   = useState(PAGE_SIZE);
+
+  // ── Calendar: days / extended tasks ─────────────────────────────────────────
   const [pastDays,   setPastDays]   = useState(INITIAL_PAST_DAYS);
   const [futureDays, setFutureDays] = useState(INITIAL_FUTURE_DAYS);
-
-  // ── Tareas extendidas (históricas / futuras fuera del proyecto actual) ────────
-  const [extendedTasks, setExtendedTasks]     = useState([]);
-  const [loadingExtended, setLoadingExtended] = useState(false);
-
-  // ── Mes visible en el calendario ─────────────────────────────────────────────
-  const [visibleMonth, setVisibleMonth] = useState('');
-
-  /**
-   * Límites del proyecto actual calculados a partir de las fechas REALES
-   * de las tareas (no de project.date_start, que puede ser null o incorrecto).
-   *
-   *   projectDateStart → fecha_deadline más antigua entre todas las tareas actuales
-   *   projectDateEnd   → fecha_deadline más reciente entre todas las tareas actuales
-   *
-   * Cualquier día dentro de [projectDateStart, projectDateEnd] es accesible
-   * siempre, con o sin conexión, sin necesidad de caché extendida.
-   */
+  const [extendedTasks,    setExtendedTasks]    = useState([]);
+  const [loadingExtended,  setLoadingExtended]  = useState(false);
+  const [visibleMonth,     setVisibleMonth]     = useState('');
   const [projectDateStart, setProjectDateStart] = useState(null);
   const [projectDateEnd,   setProjectDateEnd]   = useState(null);
 
   const prevOnline  = usePrevious(isOnline);
   const HOUR_HEIGHT = BASE_HOUR_HEIGHT * zoomLevel;
 
-  // ── Vista unificada: tareas del proyecto + tareas extendidas (sin dupes) ─────
+  // ── Derived: unified tasks ────────────────────────────────────────────────────
   const allVisibleTasks = useMemo(() => {
     const localIds = new Set(allTasks.map(t => t.id));
     return [...allTasks, ...extendedTasks.filter(t => !localIds.has(t.id))];
   }, [allTasks, extendedTasks]);
 
-  /**
-   * FIX — Bug 5: una tarea es "histórica" solo si viene del caché extendido
-   * Y NO pertenece al proyecto actual. Antes se marcaban como históricas
-   * tareas del proyecto actual que coincidían con fechas fuera del rango
-   * mal calculado de projectDateStart/End.
-   */
   const extendedTaskIds = useMemo(() => {
     const projectTaskIds = new Set(allTasks.map(t => t.id));
     return new Set(
-      extendedTasks
-        .filter(t => !projectTaskIds.has(t.id))
-        .map(t => t.id)
+      extendedTasks.filter(t => !projectTaskIds.has(t.id)).map(t => t.id),
     );
   }, [allTasks, extendedTasks]);
 
   const cachedDatesSet = useMemo(() => {
     const set = new Set();
     extendedTasks.forEach(t => {
-      if (!t.date_deadline) return;
-      const raw = t.date_deadline.replace(' ', 'T');
-      const d = new Date(raw.endsWith('Z') ? raw : raw + 'Z');
-      set.add(getLocalDateString(d));
+      const d = parseDeadline(t.date_deadline);
+      if (d) set.add(getLocalDateString(d));
     });
     return set;
   }, [extendedTasks]);
 
-  // ── Efectos ─────────────────────────────────────────────────────────────────
+  // ── List view derived ─────────────────────────────────────────────────────────
+  const listFilteredTasks = useMemo(() => {
+    let result = [...allVisibleTasks];
+    if (listStateFilter) {
+      result = result.filter(t => t.state === listStateFilter);
+    }
+    if (listSearch.trim()) {
+      const q = listSearch.toLowerCase();
+      result = result.filter(t =>
+        (t.display_name || t.name || '').toLowerCase().includes(q) ||
+        (Array.isArray(t.partner_id) ? t.partner_id[1] : '').toLowerCase().includes(q),
+      );
+    }
+    if (listPriorityFilter) {
+      result = result.filter(t => t.priority_level === listPriorityFilter);
+    }
+    if (listTagFilter) {
+      result = result.filter(t =>
+        Array.isArray(t.management_tags) && t.management_tags.includes(listTagFilter),
+      );
+    }
+    return result;
+  }, [allVisibleTasks, listStateFilter, listSearch, listPriorityFilter, listTagFilter]);
+
+  const listGroupedTasks = useMemo(() => {
+    if (listStateFilter) return null;
+    return TASK_STATES
+      .map(state => ({
+        state,
+        tasks: listFilteredTasks.filter(t => t.state === state.id),
+      }))
+      .filter(g => g.tasks.length > 0);
+  }, [listFilteredTasks, listStateFilter]);
+
+  // ── Effects ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     loadTasks();
     SyncService.cleanExpiredExtendedTasks();
@@ -225,38 +393,34 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
     return () => clearTimeout(timer);
   }, []);
 
-  // ── Cargar datos locales ──────────────────────────────────────────────────────
+  // ── Data loading ─────────────────────────────────────────────────────────────
   const loadTasks = async () => {
     try {
-      const result = await SyncService.getAllVisibleTasks();
+      const [result, tags] = await Promise.all([
+        SyncService.getAllVisibleTasks(),
+        SyncService.getManagementTags(),
+      ]);
+
       setAllTasks(result.tasks);
       setProjectId(result.projectId);
- 
-      // ✅ FIX – fuente autoritativa: campo 'date' del registro del proyecto
+      setManagementTags(tags || []);
+
       if (result.projectFinishDate) {
-        setProjectDateEnd(result.projectFinishDate);   // "YYYY-MM-DD"
+        setProjectDateEnd(result.projectFinishDate);
       }
- 
+
       const taskDates = result.tasks
         .filter(t => t.date_deadline)
-        .map(t => {
-          let s = t.date_deadline.replace(' ', 'T');
-          if (!s.endsWith('Z')) s += 'Z';
-          return new Date(s);
-        });
- 
+        .map(t => parseDeadline(t.date_deadline));
+
       if (taskDates.length > 0) {
         const minTs = Math.min(...taskDates.map(d => d.getTime()));
         setProjectDateStart(getLocalDateString(new Date(minTs)));
- 
-        // Sólo usar el máximo de tareas como fin si el proyecto NO tiene
-        // fecha de fin configurada en Odoo
         if (!result.projectFinishDate) {
           const maxTs = Math.max(...taskDates.map(d => d.getTime()));
           setProjectDateEnd(getLocalDateString(new Date(maxTs)));
         }
       } else {
-        // Sin tareas: usar date_start del proyecto como fallback
         const project = await SyncService.getMasterData('current_project');
         if (project?.date_start) {
           setProjectDateStart(project.date_start);
@@ -265,7 +429,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
           }
         }
       }
- 
+
       const cached = await SyncService.getExtendedTasks();
       setExtendedTasks(cached);
     } catch (e) {
@@ -273,84 +437,32 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
     }
   };
 
-  // ─── Fetch de tareas extendidas ──────────────────────────────────────────────
-  /**
-   * Intenta obtener tareas para [fromStr, toStr].
-   *
-   * • Online  → fetch de Odoo + guarda en caché.
-   * • Offline → revisa si los datos disponibles (proyecto + caché) cubren el
-   *             rango solicitado antes de permitir la expansión del calendario.
-   *
-   * REGLA DE LÍMITE OFFLINE:
-   *   - Dirección "past":   bloquear si `toStr < minAccessible`
-   *     (el lote COMPLETO de nuevos días queda antes de cualquier tarea conocida)
-   *   - Dirección "future": bloquear si `fromStr > maxAccessible`
-   *     (el lote COMPLETO de nuevos días queda después de cualquier tarea conocida)
-   *
-   * Esto permite que el usuario navegue por días vacíos HACIA una tarea
-   * cacheada, pero le impide ir más allá de ella cuando no hay conexión.
-   *
-   * @returns {boolean} true → proceder con la expansión del calendario
-   *                    false → no expandir (usuario informado)
-   */
+  // ── Extended task fetch ───────────────────────────────────────────────────────
   const fetchExtendedTasks = async (fromStr, toStr, direction) => {
     if (!isOnline) {
       const cached = await SyncService.getExtendedTasks();
-
       if (cached.length > 0) {
-        // Calcular límites reales: mínimo y máximo entre tareas del
-        // proyecto actual Y tareas cacheadas.
         const allBoundTasks = [...allTasks, ...cached];
         const accessibleDates = allBoundTasks
           .filter(t => t.date_deadline)
-          .map(t => {
-            let s = t.date_deadline.replace(' ', 'T');
-            if (!s.endsWith('Z')) s += 'Z';
-            return getLocalDateString(new Date(s));
-          })
+          .map(t => getLocalDateString(parseDeadline(t.date_deadline)))
           .sort();
-
         const minAccessible = accessibleDates[0];
         const maxAccessible = accessibleDates[accessibleDates.length - 1];
-
-        // Bloquear solo si el lote COMPLETO de nuevos días queda fuera
-        // del rango de datos disponibles.
         if (direction === 'past' && toStr < minAccessible) {
-          Alert.alert(
-            'Límite offline',
-            `Sin conexión puedes retroceder como máximo hasta el ${formatDateStr(minAccessible)}, ` +
-            `donde se encuentra la tarea más antigua disponible.`,
-            [{ text: 'Entendido' }]
-          );
+          Alert.alert('Límite offline', `Sin conexión puedes retroceder hasta el ${formatDateStr(minAccessible)}.`, [{ text: 'Entendido' }]);
           return false;
         }
-
         if (direction === 'future' && fromStr > maxAccessible) {
-          Alert.alert(
-            'Límite offline',
-            `Sin conexión puedes avanzar como máximo hasta el ${formatDateStr(maxAccessible)}, ` +
-            `donde se encuentra la tarea más próxima disponible.`,
-            [{ text: 'Entendido' }]
-          );
+          Alert.alert('Límite offline', `Sin conexión puedes avanzar hasta el ${formatDateStr(maxAccessible)}.`, [{ text: 'Entendido' }]);
           return false;
         }
-
         setExtendedTasks(cached);
         return true;
       }
-
-      // Sin caché en absoluto
-      Alert.alert(
-        'Sin conexión',
-        `Necesitas conexión para cargar tareas ` +
-        `${direction === 'past' ? 'anteriores' : 'futuras'} al proyecto actual.\n\n` +
-        `Conéctate e inténtalo de nuevo.`,
-        [{ text: 'Entendido' }]
-      );
+      Alert.alert('Sin conexión', `Necesitas conexión para cargar tareas ${direction === 'past' ? 'anteriores' : 'futuras'} al proyecto actual.`, [{ text: 'Entendido' }]);
       return false;
     }
-
-    // ── Online: fetch desde Odoo ──────────────────────────────────────────────
     setLoadingExtended(true);
     try {
       const tasks = await SyncService.fetchAndCacheTasksForRange(fromStr, toStr);
@@ -360,217 +472,120 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
       });
       return true;
     } catch (e) {
-      console.error('[ExtTasks] Error en fetch extendido:', e);
-      Alert.alert(
-        'Error',
-        'No se pudieron cargar las tareas del periodo solicitado. Inténtalo de nuevo.'
-      );
+      Alert.alert('Error', 'No se pudieron cargar las tareas del periodo solicitado.');
       return false;
     } finally {
       setLoadingExtended(false);
     }
   };
+
   const parseLocalDate = (dateStr) => {
     if (!dateStr) return null;
     const [y, m, d] = dateStr.split('-').map(Number);
-    return new Date(y, m - 1, d); // Constructor con año/mes/día = hora local
+    return new Date(y, m - 1, d);
   };
 
-  // ── Cargar días pasados ───────────────────────────────────────────────────────
   const handleLoadPastDays = async () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
- 
     const newPastDays     = pastDays + 7;
     const newEarliestDate = new Date(today);
     newEarliestDate.setDate(today.getDate() - newPastDays);
- 
-    // ✅ FIX: parseLocalDate en lugar de new Date(string)
     const projectStartDate = parseLocalDate(projectDateStart);
- 
-    const needsExtended = projectStartDate && newEarliestDate < projectStartDate;
- 
+    const needsExtended    = projectStartDate && newEarliestDate < projectStartDate;
+
     if (!needsExtended) {
       const compensation = 7 * DAY_WIDTH;
       setPastDays(newPastDays);
-      setTimeout(() => {
-        scrollViewRef.current?.scrollTo({ x: scrollXRef.current + compensation, animated: false });
-      }, 80);
+      setTimeout(() => { scrollViewRef.current?.scrollTo({ x: scrollXRef.current + compensation, animated: false }); }, 80);
       return;
     }
- 
-    // ── OFFLINE ────────────────────────────────────────────────────────────
     if (!isOnline) {
-      const daysFromStart = projectStartDate
-        ? Math.ceil((today - projectStartDate) / (1000 * 60 * 60 * 24))
-        : 0;
- 
+      const daysFromStart = projectStartDate ? Math.ceil((today - projectStartDate) / 86400000) : 0;
       if (pastDays < daysFromStart) {
         const compensation = (daysFromStart - pastDays) * DAY_WIDTH;
         setPastDays(daysFromStart);
-        setTimeout(() => {
-          scrollViewRef.current?.scrollTo({ x: scrollXRef.current + compensation, animated: false });
-        }, 80);
+        setTimeout(() => { scrollViewRef.current?.scrollTo({ x: scrollXRef.current + compensation, animated: false }); }, 80);
         return;
       }
- 
       const cached = await SyncService.getExtendedTasks();
       if (cached.length > 0) {
-        const dates = [...allTasks, ...cached]
-          .filter(t => t.date_deadline)
-          .map(t => {
-            let s = t.date_deadline.replace(' ', 'T');
-            if (!s.endsWith('Z')) s += 'Z';
-            return getLocalDateString(new Date(s));
-          })
-          .sort();
+        const dates = [...allTasks, ...cached].filter(t => t.date_deadline)
+          .map(t => getLocalDateString(parseDeadline(t.date_deadline))).sort();
         const minCachedDate    = dates[0];
         const currentStartDate = getLocalDateString(new Date(today.getTime() - pastDays * 86400000));
- 
         if (currentStartDate > minCachedDate) {
           const compensation = 7 * DAY_WIDTH;
           setPastDays(newPastDays);
           setExtendedTasks(cached);
-          setTimeout(() => {
-            scrollViewRef.current?.scrollTo({ x: scrollXRef.current + compensation, animated: false });
-          }, 80);
+          setTimeout(() => { scrollViewRef.current?.scrollTo({ x: scrollXRef.current + compensation, animated: false }); }, 80);
           return;
         }
-        Alert.alert(
-          'Límite offline',
-          `Sin conexión puedes retroceder hasta el ${formatDateStr(minCachedDate)}.`,
-          [{ text: 'Entendido' }]
-        );
+        Alert.alert('Límite offline', `Sin conexión puedes retroceder hasta el ${formatDateStr(minCachedDate)}.`, [{ text: 'Entendido' }]);
         return;
       }
- 
-      Alert.alert(
-        'Sin conexión',
-        'Necesitas conexión a internet para cargar tareas de periodos anteriores.',
-        [{ text: 'Entendido' }]
-      );
+      Alert.alert('Sin conexión', 'Necesitas conexión para cargar tareas de periodos anteriores.', [{ text: 'Entendido' }]);
       return;
     }
- 
-    // ── ONLINE ─────────────────────────────────────────────────────────────
     const dayBeforeProjectStart = projectStartDate
       ? new Date(projectStartDate.getTime() - 86400000)
       : new Date(today.getTime() - (pastDays + 1) * 86400000);
- 
     const prevEarliestMinus1 = new Date(today);
     prevEarliestMinus1.setDate(today.getDate() - pastDays - 1);
- 
-    const fetchToDate = prevEarliestMinus1 < dayBeforeProjectStart
-      ? prevEarliestMinus1
-      : dayBeforeProjectStart;
- 
+    const fetchToDate = prevEarliestMinus1 < dayBeforeProjectStart ? prevEarliestMinus1 : dayBeforeProjectStart;
     const fromStr = getLocalDateString(newEarliestDate);
     const toStr   = getLocalDateString(fetchToDate);
- 
     if (fromStr <= toStr) {
       const canProceed = await fetchExtendedTasks(fromStr, toStr, 'past');
       if (!canProceed) return;
     }
- 
     const compensation = 7 * DAY_WIDTH;
     setPastDays(newPastDays);
-    setTimeout(() => {
-      scrollViewRef.current?.scrollTo({ x: scrollXRef.current + compensation, animated: false });
-    }, 80);
+    setTimeout(() => { scrollViewRef.current?.scrollTo({ x: scrollXRef.current + compensation, animated: false }); }, 80);
   };
 
-  // ── Cargar días futuros ───────────────────────────────────────────────────────
   const handleLoadFutureDays = async () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
- 
     const newFutureDays = futureDays + 7;
     const newLatestDate = new Date(today);
     newLatestDate.setDate(today.getDate() + newFutureDays);
- 
-    // ✅ FIX: parseLocalDate en lugar de new Date(string)
     const projectEndDate = parseLocalDate(projectDateEnd);
- 
-    const needsExtended = projectEndDate && newLatestDate > projectEndDate;
- 
-    if (!needsExtended) {
-      setFutureDays(newFutureDays);
-      return;
-    }
- 
-    // ── OFFLINE ────────────────────────────────────────────────────────────
+    const needsExtended  = projectEndDate && newLatestDate > projectEndDate;
+
+    if (!needsExtended) { setFutureDays(newFutureDays); return; }
     if (!isOnline) {
-      const daysToEnd = projectEndDate
-        ? Math.ceil((projectEndDate - today) / (1000 * 60 * 60 * 24))
-        : 0;
- 
-      if (futureDays < daysToEnd) {
-        // Todavía dentro del proyecto → expandir hasta el último día real
-        setFutureDays(daysToEnd);
-        return;
-      }
- 
-      // Ya mostramos todo el proyecto. ¿Hay caché extendida más allá?
+      const daysToEnd = projectEndDate ? Math.ceil((projectEndDate - today) / 86400000) : 0;
+      if (futureDays < daysToEnd) { setFutureDays(daysToEnd); return; }
       const cached = await SyncService.getExtendedTasks();
       if (cached.length > 0) {
-        const dates = [...allTasks, ...cached]
-          .filter(t => t.date_deadline)
-          .map(t => {
-            let s = t.date_deadline.replace(' ', 'T');
-            if (!s.endsWith('Z')) s += 'Z';
-            return getLocalDateString(new Date(s));
-          })
-          .sort();
+        const dates = [...allTasks, ...cached].filter(t => t.date_deadline)
+          .map(t => getLocalDateString(parseDeadline(t.date_deadline))).sort();
         const maxCachedDate  = dates[dates.length - 1];
         const currentEndDate = getLocalDateString(new Date(today.getTime() + futureDays * 86400000));
- 
-        if (currentEndDate < maxCachedDate) {
-          setFutureDays(newFutureDays);
-          setExtendedTasks(cached);
-          return;
-        }
-        Alert.alert(
-          'Límite offline',
-          `Sin conexión puedes avanzar hasta el ${formatDateStr(maxCachedDate)}.`,
-          [{ text: 'Entendido' }]
-        );
+        if (currentEndDate < maxCachedDate) { setFutureDays(newFutureDays); setExtendedTasks(cached); return; }
+        Alert.alert('Límite offline', `Sin conexión puedes avanzar hasta el ${formatDateStr(maxCachedDate)}.`, [{ text: 'Entendido' }]);
         return;
       }
- 
-      Alert.alert(
-        'Sin conexión',
-        'Necesitas conexión a internet para cargar tareas de periodos posteriores.',
-        [{ text: 'Entendido' }]
-      );
+      Alert.alert('Sin conexión', 'Necesitas conexión para cargar tareas de periodos posteriores.', [{ text: 'Entendido' }]);
       return;
     }
- 
-    // ── ONLINE ─────────────────────────────────────────────────────────────
-    // Fetch solo para días verdaderamente fuera del proyecto
     const dayAfterProjectEnd = projectEndDate
       ? new Date(projectEndDate.getTime() + 86400000)
       : new Date(today.getTime() + (futureDays + 1) * 86400000);
- 
     const prevLatestPlus1 = new Date(today);
     prevLatestPlus1.setDate(today.getDate() + futureDays + 1);
- 
-    const fetchFromDate = prevLatestPlus1 > dayAfterProjectEnd
-      ? prevLatestPlus1
-      : dayAfterProjectEnd;
- 
+    const fetchFromDate = prevLatestPlus1 > dayAfterProjectEnd ? prevLatestPlus1 : dayAfterProjectEnd;
     const fromStr = getLocalDateString(fetchFromDate);
     const toStr   = getLocalDateString(newLatestDate);
- 
     if (fromStr <= toStr) {
       const canProceed = await fetchExtendedTasks(fromStr, toStr, 'future');
       if (!canProceed) return;
     }
- 
     setFutureDays(newFutureDays);
   };
- 
 
-  // ── Generación de columnas ───────────────────────────────────────────────────
+  // ── Calendar helpers ──────────────────────────────────────────────────────────
   const getDaysToShow = () => {
     const today = new Date();
     const days  = [];
@@ -591,30 +606,31 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
 
   const days = getDaysToShow();
 
-  // ── Scroll tracking ──────────────────────────────────────────────────────────
   const handleCalendarScroll = (e) => {
     const x = e.nativeEvent.contentOffset.x;
     scrollXRef.current = x;
-
-    const screenWidth = Dimensions.get('window').width;
-    const centerOffset = x + (screenWidth - 60) / 2;
-    const centerDayIndex = Math.round(centerOffset / DAY_WIDTH);
-    const clampedIndex = Math.max(0, Math.min(centerDayIndex, days.length - 1));
-    const centerDay = days[clampedIndex];
+    const screenWidth   = Dimensions.get('window').width;
+    const centerOffset  = x + (screenWidth - 60) / 2;
+    const centerDayIdx  = Math.round(centerOffset / DAY_WIDTH);
+    const clampedIdx    = Math.max(0, Math.min(centerDayIdx, days.length - 1));
+    const centerDay     = days[clampedIdx];
     if (centerDay) {
       const label = centerDay.date.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
       setVisibleMonth(prev => (prev !== label ? label : prev));
     }
   };
 
-  // ── Datos ────────────────────────────────────────────────────────────────────
+  const getTasksForDayAndHour = (dayDateString, hour) =>
+    allVisibleTasks.filter(task => {
+      const d = parseDeadline(task.date_deadline);
+      return d && getLocalDateString(d) === dayDateString && d.getHours() === hour;
+    });
+
+  // ── Data actions ──────────────────────────────────────────────────────────────
   const handleRefresh = async () => {
     if (!isOnline) { Alert.alert('Sin conexión', 'Necesitas internet para sincronizar'); return; }
-    try {
-      setRefreshing(true);
-      await syncAll();
-      await loadTasks();
-    } finally { setRefreshing(false); }
+    try { setRefreshing(true); await syncAll(); await loadTasks(); }
+    finally { setRefreshing(false); }
   };
 
   const handleTaskCreated = async () => { await loadTasks(); setCreateModal(false); };
@@ -623,12 +639,10 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
     if (!opts?.keepModalOpen) setSelectedTask(null);
   };
 
-  // ── Interacciones ─────────────────────────────────────────────────────────────
   const handleDayHeaderPress = (dayDateString) => {
     const dayTasks = allVisibleTasks.filter(task => {
-      if (!task.date_deadline) return false;
-      const d = new Date(task.date_deadline.replace(' ', 'T') + (task.date_deadline.includes('Z') ? '' : 'Z'));
-      return getLocalDateString(d) === dayDateString;
+      const d = parseDeadline(task.date_deadline);
+      return d && getLocalDateString(d) === dayDateString;
     });
     setSelectedDayDate(dayDateString);
     setSelectedDayTasks(dayTasks);
@@ -646,21 +660,338 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
     }
   };
 
-  const getTasksForDayAndHour = (dayDateString, hour) =>
-    allVisibleTasks.filter(task => {
-      if (!task.date_deadline) return false;
-      let s = task.date_deadline.replace(' ', 'T');
-      if (!s.endsWith('Z')) s += 'Z';
-      const d = new Date(s);
-      return getLocalDateString(d) === dayDateString && d.getHours() === hour;
-    });
-
-  // ── Estadísticas ─────────────────────────────────────────────────────────────
+  // ── Stats ─────────────────────────────────────────────────────────────────────
   const activeCount = allVisibleTasks.filter(t =>
-    ['01_in_progress', '02_changes_requested', '03_approved', '04_waiting_normal'].includes(t.state)
+    ['01_in_progress', '02_changes_requested', '03_approved', '04_waiting_normal'].includes(t.state),
   ).length;
   const doneCount = allVisibleTasks.filter(t => t.state === '1_done').length;
 
+  // ── List view helpers ─────────────────────────────────────────────────────────
+  const getStateCount = (stateId) => allVisibleTasks.filter(t => t.state === stateId).length;
+
+  const toggleGroup = (stateId) => {
+    setListCollapsed(prev => ({ ...prev, [stateId]: !prev[stateId] }));
+  };
+
+  const clearAllListFilters = () => {
+    setListStateFilter(null);
+    setListSearch('');
+    setListSearchVisible(false);
+    setListPriorityFilter(null);
+    setListTagFilter(null);
+    setListVisibleCount(PAGE_SIZE);
+  };
+
+  const hasActiveListFilters = !!(listStateFilter || listSearch.trim() || listPriorityFilter || listTagFilter);
+
+  // ── Render: ActionBar (view toggle + future actions placeholder) ───────────────
+  const renderActionBar = () => (
+    <View style={styles.actionBar}>
+      {/* View toggle */}
+      <View style={styles.viewToggleGroup}>
+        <TouchableOpacity
+          style={[styles.viewToggleBtn, viewMode === 'calendar' && styles.viewToggleBtnActive]}
+          onPress={() => setViewMode('calendar')}
+          activeOpacity={0.8}
+        >
+          <Feather name="calendar" size={14} color={viewMode === 'calendar' ? '#fff' : '#9CA3AF'} />
+          <Text style={[styles.viewToggleBtnTxt, viewMode === 'calendar' && styles.viewToggleBtnTxtActive]}>
+            Calendario
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.viewToggleBtn, viewMode === 'list' && styles.viewToggleBtnActive]}
+          onPress={() => setViewMode('list')}
+          activeOpacity={0.8}
+        >
+          <Feather name="list" size={14} color={viewMode === 'list' ? '#fff' : '#9CA3AF'} />
+          <Text style={[styles.viewToggleBtnTxt, viewMode === 'list' && styles.viewToggleBtnTxtActive]}>
+            Lista
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* ── Placeholder: future quick actions (filter by client, sort, etc.) ── */}
+      <View style={styles.actionBarRight}>
+        {/* Future actions will appear here */}
+      </View>
+    </View>
+  );
+
+  // ── Render: List View ─────────────────────────────────────────────────────────
+  const renderListView = () => {
+    const total         = listFilteredTasks.length;
+    const flatVisible   = listStateFilter ? listFilteredTasks.slice(0, listVisibleCount) : null;
+    const hasMoreFlat   = listStateFilter && listFilteredTasks.length > listVisibleCount;
+    const showingFrom   = 1;
+    const showingTo     = flatVisible ? flatVisible.length : total;
+
+    return (
+      <View style={styles.listViewContainer}>
+
+        {/* ── 1. State cards strip ─────────────────────────────────────── */}
+        <View style={styles.listStateSection}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.listStateScroll}
+          >
+            {TASK_STATES.map(state => {
+              const count    = getStateCount(state.id);
+              if (count === 0) return null;
+              const isActive = listStateFilter === state.id;
+              return (
+                <TouchableOpacity
+                  key={state.id}
+                  style={[
+                    styles.listStateCard,
+                    isActive && styles.listStateCardActive,
+                    { borderTopColor: state.color },
+                  ]}
+                  onPress={() => {
+                    setListStateFilter(prev => prev === state.id ? null : state.id);
+                    setListVisibleCount(PAGE_SIZE);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.listStateCardTop}>
+                    <View style={[styles.listStateIndicator, { backgroundColor: state.color }]} />
+                    <Text style={[styles.listStateCardCount, { color: state.color }]}>{count}</Text>
+                  </View>
+                  <Text style={styles.listStateCardName} numberOfLines={2}>{state.label}</Text>
+                  {isActive && (
+                    <View style={[styles.listStateArrow, { borderTopColor: state.color }]} />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
+          {/* Summary row */}
+          <View style={styles.listStateSummaryRow}>
+            <Text style={styles.listStateSummaryText}>
+              {allVisibleTasks.length} tarea{allVisibleTasks.length !== 1 ? 's' : ''} en total
+            </Text>
+            {hasActiveListFilters && (
+              <TouchableOpacity style={styles.listClearAllBtn} onPress={clearAllListFilters}>
+                <Feather name="x" size={12} color="#EF4444" />
+                <Text style={styles.listClearAllTxt}>Limpiar filtros</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+
+        {/* ── 2. Filter bar ────────────────────────────────────────────── */}
+        <View style={styles.listFilterBar}>
+          {/* Search toggle */}
+          <TouchableOpacity
+            style={[styles.listFilterChip, listSearchVisible && styles.listFilterChipActive]}
+            onPress={() => {
+              setListSearchVisible(v => !v);
+              if (listSearchVisible) setListSearch('');
+            }}
+          >
+            <Feather name="search" size={13} color={listSearchVisible ? '#fff' : '#6B7280'} />
+            <Text style={[styles.listFilterChipTxt, listSearchVisible && styles.listFilterChipTxtActive]}>
+              {listSearch ? `"${listSearch.slice(0, 10)}${listSearch.length > 10 ? '…' : ''}"` : 'Buscar'}
+            </Text>
+          </TouchableOpacity>
+
+          {/* Priority filters */}
+          {PRIORITY_OPTS.map(p => (
+            <TouchableOpacity
+              key={p.id}
+              style={[
+                styles.listFilterChip,
+                listPriorityFilter === p.id && { backgroundColor: p.color, borderColor: p.color },
+              ]}
+              onPress={() => setListPriorityFilter(prev => prev === p.id ? null : p.id)}
+            >
+              <Feather
+                name={p.icon}
+                size={13}
+                color={listPriorityFilter === p.id ? '#fff' : p.color}
+              />
+              {listPriorityFilter === p.id && (
+                <Text style={[styles.listFilterChipTxt, styles.listFilterChipTxtActive]}>
+                  {p.label}
+                </Text>
+              )}
+            </TouchableOpacity>
+          ))}
+
+          {/* Tag filter — cycle through available tags */}
+          {managementTags.length > 0 && (
+            <TouchableOpacity
+              style={[styles.listFilterChip, listTagFilter != null && styles.listFilterChipActive]}
+              onPress={() => {
+                const tagIds     = managementTags.map(t => t.id);
+                const currentIdx = tagIds.indexOf(listTagFilter);
+                const nextTag    = currentIdx === -1
+                  ? tagIds[0]
+                  : currentIdx === tagIds.length - 1 ? null : tagIds[currentIdx + 1];
+                setListTagFilter(nextTag);
+              }}
+            >
+              <Feather name="tag" size={13} color={listTagFilter != null ? '#fff' : '#6B7280'} />
+              <Text style={[styles.listFilterChipTxt, listTagFilter != null && styles.listFilterChipTxtActive]}>
+                {listTagFilter != null
+                  ? managementTags.find(t => t.id === listTagFilter)?.name ?? 'Etiqueta'
+                  : 'Etiqueta'}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* ── 3. Search bar (expanded) ──────────────────────────────────── */}
+        {listSearchVisible && (
+          <View style={styles.listSearchBar}>
+            <Feather name="search" size={16} color="#9CA3AF" />
+            <TextInput
+              style={styles.listSearchInput}
+              value={listSearch}
+              onChangeText={setListSearch}
+              placeholder="Buscar por título o cliente..."
+              placeholderTextColor="#9CA3AF"
+              autoFocus
+              returnKeyType="search"
+              clearButtonMode="while-editing"
+            />
+            {listSearch.length > 0 && (
+              <TouchableOpacity onPress={() => setListSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Feather name="x-circle" size={16} color="#9CA3AF" />
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
+        {/* ── 4. Pagination / counter header ───────────────────────────── */}
+        <View style={styles.listPagHeader}>
+          {listStateFilter ? (
+            <>
+              {/* Active state label with dismiss */}
+              <View style={styles.listActiveStatePill}>
+                <View style={[styles.listActiveStateDot, {
+                  backgroundColor: TASK_STATES.find(s => s.id === listStateFilter)?.color,
+                }]} />
+                <Text style={styles.listActiveStateTxt}>
+                  {TASK_STATES.find(s => s.id === listStateFilter)?.label}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => { setListStateFilter(null); setListVisibleCount(PAGE_SIZE); }}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <Feather name="x" size={13} color="#6B7280" />
+                </TouchableOpacity>
+              </View>
+              {/* Pagination: 1–N / Total */}
+              <Text style={styles.listPagCount}>
+                {showingFrom}–{showingTo} / {total}
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.listPagCount}>
+              {total} resultado{total !== 1 ? 's' : ''}
+              {hasActiveListFilters ? ' (filtrado)' : ''}
+            </Text>
+          )}
+        </View>
+
+        {/* ── 5. Task content ──────────────────────────────────────────── */}
+        {total === 0 ? (
+          <View style={styles.listEmptyState}>
+            <Feather name="inbox" size={40} color="#D1D5DB" />
+            <Text style={styles.listEmptyTitle}>Sin resultados</Text>
+            <Text style={styles.listEmptySubtitle}>
+              {hasActiveListFilters
+                ? 'Prueba cambiando o eliminando los filtros activos.'
+                : 'No hay tareas disponibles para el proyecto actual.'}
+            </Text>
+          </View>
+        ) : listStateFilter ? (
+          /* ── Flat list when a state is selected ── */
+          <View>
+            {flatVisible.map((task, idx) => (
+              <TaskListItem
+                key={task.id}
+                task={task}
+                tags={managementTags}
+                currentUserId={userData?.uid}
+                isHistorical={extendedTaskIds.has(task.id)}
+                onPress={() => setSelectedTask(task)}
+              />
+            ))}
+            {hasMoreFlat && (
+              <TouchableOpacity
+                style={styles.loadMoreBtn}
+                onPress={() => setListVisibleCount(v => v + PAGE_SIZE)}
+              >
+                <Text style={styles.loadMoreBtnTxt}>
+                  Cargar {Math.min(PAGE_SIZE, listFilteredTasks.length - listVisibleCount)} más
+                </Text>
+                <Text style={styles.loadMoreBtnCount}>
+                  {listFilteredTasks.length - listVisibleCount} restantes
+                </Text>
+                <Feather name="chevron-down" size={16} color="#64c27b" />
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : (
+          /* ── Grouped by state (collapsible) ── */
+          listGroupedTasks.map(({ state, tasks: groupTasks }) => {
+            const isCollapsed     = !!listCollapsed[state.id];
+            const visibleInGroup  = isCollapsed ? [] : groupTasks.slice(0, PAGE_SIZE);
+            const hasMoreInGroup  = !isCollapsed && groupTasks.length > PAGE_SIZE;
+
+            return (
+              <View key={state.id} style={styles.stateGroup}>
+                <StateGroupHeader
+                  stateInfo={state}
+                  count={groupTasks.length}
+                  collapsed={isCollapsed}
+                  onToggle={() => toggleGroup(state.id)}
+                />
+                {!isCollapsed && (
+                  <View>
+                    {visibleInGroup.map(task => (
+                      <TaskListItem
+                        key={task.id}
+                        task={task}
+                        tags={managementTags}
+                        currentUserId={userData?.uid}
+                        isHistorical={extendedTaskIds.has(task.id)}
+                        onPress={() => setSelectedTask(task)}
+                      />
+                    ))}
+                    {hasMoreInGroup && (
+                      <TouchableOpacity
+                        style={styles.groupLoadMoreBtn}
+                        onPress={() => {
+                          setListStateFilter(state.id);
+                          setListVisibleCount(PAGE_SIZE * 2);
+                        }}
+                      >
+                        <Feather name="list" size={14} color="#64c27b" />
+                        <Text style={styles.groupLoadMoreTxt}>
+                          Ver los {groupTasks.length} en "{state.label}"
+                        </Text>
+                        <Feather name="arrow-right" size={14} color="#64c27b" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </View>
+            );
+          })
+        )}
+
+        {/* Bottom padding */}
+        <View style={{ height: 32 }} />
+      </View>
+    );
+  };
+
+  // ── FAB actions ───────────────────────────────────────────────────────────────
   const fabActions = [
     { icon: 'more-vertical', onPress: () => {}                   },
     { icon: 'menu',          onPress: () => setMenuVisible(true) },
@@ -668,232 +999,245 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
     { icon: 'arrow-left',    onPress: onBack                     },
   ];
 
-  // ── Render ───────────────────────────────────────────────────────────────────
+  // ── Main render ───────────────────────────────────────────────────────────────
   return (
     <SafeAreaProvider style={styles.safeArea}>
       <View style={styles.container}>
         <ToastContainer />
-        <SlideMenu visible={menuVisible} onClose={() => setMenuVisible(false)}
-          userData={userData} username={username} onLogout={onLogout} />
+        <SlideMenu
+          visible={menuVisible}
+          onClose={() => setMenuVisible(false)}
+          userData={userData}
+          username={username}
+          onLogout={onLogout}
+        />
         <ExpandableFAB actions={fabActions} />
 
         <ScrollView
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh}
-              tintColor="#64c27b" colors={['#64c27b']} />
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor="#64c27b"
+              colors={['#64c27b']}
+            />
           }
         >
           <Card style={styles.mainCard}>
             <DashboardHeader userName={username || 'Usuario'} isOnline={isOnline} />
 
-            {/* Estadísticas */}
+            {/* ── Stats bar ── */}
             <View style={styles.statsBar}>
               <View style={styles.statItem}>
                 <Text style={styles.statValue}>{activeCount}</Text>
                 <Text style={styles.statLabel}>Activas</Text>
               </View>
+              <View style={styles.statDivider} />
               <View style={styles.statItem}>
                 <Text style={styles.statValue}>{doneCount}</Text>
                 <Text style={styles.statLabel}>Finalizadas</Text>
               </View>
+              <View style={styles.statDivider} />
               <View style={styles.statItem}>
                 <Text style={styles.statValue}>{allVisibleTasks.length}</Text>
                 <Text style={styles.statLabel}>Total</Text>
               </View>
             </View>
 
-            {/* Zoom */}
-            <View style={styles.zoomControls}>
-              <TouchableOpacity style={styles.zoomButton}
-                onPress={() => setZoomLevel(v => Math.max(MIN_ZOOM, +(v - 0.2).toFixed(1)))}>
-                <Feather name="zoom-out" size={18} color="#6B7280" />
-              </TouchableOpacity>
-              <Text style={styles.zoomText}>{Math.round(zoomLevel * 100)}%</Text>
-              <TouchableOpacity style={styles.zoomButton}
-                onPress={() => setZoomLevel(v => Math.min(MAX_ZOOM, +(v + 0.2).toFixed(1)))}>
-                <Feather name="zoom-in" size={18} color="#6B7280" />
-              </TouchableOpacity>
-            </View>
+            {/* ── ActionBar: view toggle + future quick actions ── */}
+            {renderActionBar()}
 
-            {/* Indicador de mes visible */}
-            {visibleMonth !== '' && (
-              <View style={styles.monthIndicator}>
-                <Feather name="calendar" size={13} color="#64c27b" />
-                <Text style={styles.monthIndicatorText}>{visibleMonth}</Text>
-              </View>
-            )}
-
-            {/* Calendario */}
-            <ScrollView
-              horizontal
-              ref={scrollViewRef}
-              style={styles.calendarScroll}
-              showsHorizontalScrollIndicator={false}
-              onScroll={handleCalendarScroll}
-              scrollEventThrottle={16}
-              bounces={false}
-              overScrollMode="never"
-            >
-              <View style={styles.calendar}>
-
-                {/* ── Columna de horas ── */}
-                <View style={styles.hoursColumn}>
-                  {/* Botón: cargar días pasados */}
+            {/* ── Calendar view ── */}
+            {viewMode === 'calendar' && (
+              <>
+                {/* Zoom controls */}
+                <View style={styles.zoomControls}>
                   <TouchableOpacity
-                    style={[styles.cornerButton, loadingExtended && styles.cornerButtonDisabled]}
-                    onPress={loadingExtended ? undefined : handleLoadPastDays}
-                    activeOpacity={loadingExtended ? 1 : 0.75}
+                    style={styles.zoomButton}
+                    onPress={() => setZoomLevel(v => Math.max(MIN_ZOOM, +(v - 0.2).toFixed(1)))}
                   >
-                    {loadingExtended ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <Feather name="skip-back" size={18} color="#fff" />
-                    )}
+                    <Feather name="zoom-out" size={18} color="#6B7280" />
                   </TouchableOpacity>
-
-                  {HOURS.map(hour => (
-                    <View key={hour} style={[styles.hourCell, { height: HOUR_HEIGHT }]}>
-                      <Text style={styles.hourText}>
-                        {hour.toString().padStart(2, '0')}:00
-                      </Text>
-                    </View>
-                  ))}
+                  <Text style={styles.zoomText}>{Math.round(zoomLevel * 100)}%</Text>
+                  <TouchableOpacity
+                    style={styles.zoomButton}
+                    onPress={() => setZoomLevel(v => Math.min(MAX_ZOOM, +(v + 0.2).toFixed(1)))}
+                  >
+                    <Feather name="zoom-in" size={18} color="#6B7280" />
+                  </TouchableOpacity>
                 </View>
 
-                {/* ── Columnas de días ── */}
-                {days.map((day, dayIndex) => {
-                  const isCached = cachedDatesSet.has(day.dateString);
-                  const isFuture = !day.isPast && !day.isToday;
+                {/* Month indicator */}
+                {visibleMonth !== '' && (
+                  <View style={styles.monthIndicator}>
+                    <Feather name="calendar" size={13} color="#64c27b" />
+                    <Text style={styles.monthIndicatorText}>{visibleMonth}</Text>
+                  </View>
+                )}
 
-                  return (
-                  <View key={dayIndex} style={[styles.dayColumn, { width: DAY_WIDTH }]}>
-                    <TouchableOpacity
-                      style={[
-                        styles.headerCell,
-                        day.isPast  && styles.headerPast,
-                        isFuture    && styles.headerFuture,
-                        day.isToday && styles.headerToday,
-                        (projectDateStart && day.dateString < projectDateStart) ||
-                        (projectDateEnd   && day.dateString > projectDateEnd)
-                          ? styles.headerOutOfProject
-                          : null,
-                      ]}
-                      onPress={() => handleDayHeaderPress(day.dateString)}
-                      activeOpacity={0.7}
-                    >
-                      {/* Nombre del día */}
-                      <Text style={[
-                        styles.dayName,
-                        day.isPast  && styles.dayNamePast,
-                        isFuture    && styles.dayNameFuture,
-                        day.isToday && styles.dayNameToday,
-                      ]}>
-                        {day.dayName}
-                      </Text>
-
-                      {/* Número del día — hoy va dentro de un círculo */}
-                      {day.isToday ? (
-                        <View style={styles.todayCircle}>
-                          <Text style={styles.todayCircleText}>{day.dayNumber}</Text>
-                        </View>
-                      ) : (
-                        <Text style={[
-                          styles.dayNumber,
-                          day.isPast && styles.dayNumberPast,
-                          isFuture   && styles.dayNumberFuture,
-                        ]}>
-                          {day.dayNumber}
-                        </Text>
-                      )}
-
-                      {/* Marcadores inferiores */}
-                      <View style={styles.dayMarkerRow}>
-                        {isCached && (
-                          <View style={[styles.dayMarker, styles.dayMarkerCached]}>
-                            <Feather name="cloud" size={8} color="#7C3AED" />
-                          </View>
+                {/* Calendar grid */}
+                <ScrollView
+                  horizontal
+                  ref={scrollViewRef}
+                  style={styles.calendarScroll}
+                  showsHorizontalScrollIndicator={false}
+                  onScroll={handleCalendarScroll}
+                  scrollEventThrottle={16}
+                  bounces={false}
+                  overScrollMode="never"
+                >
+                  <View style={styles.calendar}>
+                    {/* Hours column */}
+                    <View style={styles.hoursColumn}>
+                      <TouchableOpacity
+                        style={[styles.cornerButton, loadingExtended && styles.cornerButtonDisabled]}
+                        onPress={loadingExtended ? undefined : handleLoadPastDays}
+                        activeOpacity={loadingExtended ? 1 : 0.75}
+                      >
+                        {loadingExtended ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <Feather name="skip-back" size={18} color="#fff" />
                         )}
-                      </View>
-                    </TouchableOpacity>
+                      </TouchableOpacity>
+                      {HOURS.map(hour => (
+                        <View key={hour} style={[styles.hourCell, { height: HOUR_HEIGHT }]}>
+                          <Text style={styles.hourText}>
+                            {hour.toString().padStart(2, '0')}:00
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
 
-                    {HOURS.map(hour => {
-                      const slotTasks = getTasksForDayAndHour(day.dateString, hour);
+                    {/* Day columns */}
+                    {days.map((day, dayIndex) => {
+                      const isCached = cachedDatesSet.has(day.dateString);
+                      const isFuture = !day.isPast && !day.isToday;
                       return (
-                        <TouchableOpacity
-                          key={hour}
-                          style={[
-                            styles.timeSlot,
-                            { height: HOUR_HEIGHT },
-                            slotTasks.length > 0 && styles.timeSlotWithTasks,
-                          ]}
-                          activeOpacity={slotTasks.length > 0 ? 0.6 : 1}
-                          onPress={() => handleSlotPress(slotTasks, day.dateString)}
-                        >
-                          {slotTasks.slice(0, 2).map((task, idx) => (
-                            <TaskCard
-                              key={task.id}
-                              task={task}
-                              onPress={() => setSelectedTask(task)}
-                              style={{
-                                height: slotTasks.length === 1 ? HOUR_HEIGHT - 8 : HOUR_HEIGHT / 2 - 6,
-                                marginBottom: idx < Math.min(slotTasks.length, 2) - 1 ? 3 : 0,
-                                opacity: task.state === '1_done' ? 0.5 : 1,
-                              }}
-                              priorityLevel={task.priority_level}
-                              isDone={task.state === '1_done'}
-                            />
-                          ))}
-                          {slotTasks.length > 2 && (
-                            <TouchableOpacity
-                              style={styles.moreTasksBadge}
-                              onPress={() => handleSlotPress(slotTasks, day.dateString)}
-                            >
-                              <Feather name="more-horizontal" size={12} color="#fff" />
-                              <Text style={styles.moreTasksText}>+{slotTasks.length - 2}</Text>
-                            </TouchableOpacity>
-                          )}
-                        </TouchableOpacity>
+                        <View key={dayIndex} style={[styles.dayColumn, { width: DAY_WIDTH }]}>
+                          <TouchableOpacity
+                            style={[
+                              styles.headerCell,
+                              day.isPast  && styles.headerPast,
+                              isFuture    && styles.headerFuture,
+                              day.isToday && styles.headerToday,
+                              (projectDateStart && day.dateString < projectDateStart) ||
+                              (projectDateEnd   && day.dateString > projectDateEnd)
+                                ? styles.headerOutOfProject
+                                : null,
+                            ]}
+                            onPress={() => handleDayHeaderPress(day.dateString)}
+                            activeOpacity={0.7}
+                          >
+                            <Text style={[
+                              styles.dayName,
+                              day.isPast  && styles.dayNamePast,
+                              isFuture    && styles.dayNameFuture,
+                              day.isToday && styles.dayNameToday,
+                            ]}>
+                              {day.dayName}
+                            </Text>
+                            {day.isToday ? (
+                              <View style={styles.todayCircle}>
+                                <Text style={styles.todayCircleText}>{day.dayNumber}</Text>
+                              </View>
+                            ) : (
+                              <Text style={[
+                                styles.dayNumber,
+                                day.isPast && styles.dayNumberPast,
+                                isFuture   && styles.dayNumberFuture,
+                              ]}>
+                                {day.dayNumber}
+                              </Text>
+                            )}
+                            <View style={styles.dayMarkerRow}>
+                              {isCached && (
+                                <View style={[styles.dayMarker, styles.dayMarkerCached]}>
+                                  <Feather name="cloud" size={8} color="#7C3AED" />
+                                </View>
+                              )}
+                            </View>
+                          </TouchableOpacity>
+
+                          {HOURS.map(hour => {
+                            const slotTasks = getTasksForDayAndHour(day.dateString, hour);
+                            return (
+                              <TouchableOpacity
+                                key={hour}
+                                style={[
+                                  styles.timeSlot,
+                                  { height: HOUR_HEIGHT },
+                                  slotTasks.length > 0 && styles.timeSlotWithTasks,
+                                ]}
+                                activeOpacity={slotTasks.length > 0 ? 0.6 : 1}
+                                onPress={() => handleSlotPress(slotTasks, day.dateString)}
+                              >
+                                {slotTasks.slice(0, 2).map((task, idx) => (
+                                  <TaskCard
+                                    key={task.id}
+                                    task={task}
+                                    onPress={() => setSelectedTask(task)}
+                                    style={{
+                                      height: slotTasks.length === 1 ? HOUR_HEIGHT - 8 : HOUR_HEIGHT / 2 - 6,
+                                      marginBottom: idx < Math.min(slotTasks.length, 2) - 1 ? 3 : 0,
+                                      opacity: task.state === '1_done' ? 0.5 : 1,
+                                    }}
+                                    priorityLevel={task.priority_level}
+                                    isDone={task.state === '1_done'}
+                                  />
+                                ))}
+                                {slotTasks.length > 2 && (
+                                  <TouchableOpacity
+                                    style={styles.moreTasksBadge}
+                                    onPress={() => handleSlotPress(slotTasks, day.dateString)}
+                                  >
+                                    <Feather name="more-horizontal" size={12} color="#fff" />
+                                    <Text style={styles.moreTasksText}>+{slotTasks.length - 2}</Text>
+                                  </TouchableOpacity>
+                                )}
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
                       );
                     })}
+
+                    {/* Future nav column */}
+                    <TouchableOpacity
+                      style={[styles.futureNavColumn, loadingExtended && styles.cornerButtonDisabled]}
+                      onPress={loadingExtended ? undefined : handleLoadFutureDays}
+                      activeOpacity={loadingExtended ? 1 : 0.75}
+                    >
+                      <View style={styles.cornerButton}>
+                        {loadingExtended ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <Feather name="skip-forward" size={18} color="#fff" />
+                        )}
+                      </View>
+                      <View style={styles.futureColumnBody} />
+                    </TouchableOpacity>
                   </View>
-                  );
-                })}
+                </ScrollView>
 
-                {/* ── Columna "cargar futuro" ── */}
-                <TouchableOpacity
-                  style={[
-                    styles.futureNavColumn,
-                    loadingExtended && styles.cornerButtonDisabled,
-                  ]}
-                  onPress={loadingExtended ? undefined : handleLoadFutureDays}
-                  activeOpacity={loadingExtended ? 1 : 0.75}
-                >
-                  <View style={styles.cornerButton}>
-                    {loadingExtended ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <Feather name="skip-forward" size={18} color="#fff" />
-                    )}
+                {allVisibleTasks.length === 0 && !loadingExtended && (
+                  <View style={styles.emptyState}>
+                    <Feather name="calendar" size={48} color="#D1D5DB" />
+                    <Text style={styles.emptyText}>No tienes tareas programadas</Text>
+                    <Text style={styles.emptySubtext}>Toca el botón + para crear una nueva</Text>
                   </View>
-                  <View style={styles.futureColumnBody} />
-                </TouchableOpacity>
-
-              </View>
-            </ScrollView>
-
-            {allVisibleTasks.length === 0 && !loadingExtended && (
-              <View style={styles.emptyState}>
-                <Feather name="calendar" size={48} color="#D1D5DB" />
-                <Text style={styles.emptyText}>No tienes tareas programadas</Text>
-                <Text style={styles.emptySubtext}>Toca el botón + para crear una nueva</Text>
-              </View>
+                )}
+              </>
             )}
+
+            {/* ── List view ── */}
+            {viewMode === 'list' && renderListView()}
           </Card>
         </ScrollView>
 
-        {/* Modales */}
+        {/* Modals */}
         <DayTasksModal
           visible={dayModalVisible}
           date={selectedDayDate}
@@ -921,7 +1265,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   );
 }
 
-// ─── Estilos ──────────────────────────────────────────────────────────────────
+// ─── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   safeArea:      { flex: 1, backgroundColor: '#f5f0ebff' },
   container:     { flex: 1 },
@@ -929,21 +1273,81 @@ const styles = StyleSheet.create({
   scrollContent: { padding: 16, paddingTop: 80, paddingBottom: 140 },
   mainCard:      { marginBottom: 16 },
 
+  // ── Stats bar ────────────────────────────────────────────────────────────────
   statsBar: {
-    flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 12,
-    backgroundColor: '#F9FAFB', borderBottomWidth: 1, borderBottomColor: '#E5E7EB',
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#F9FAFB',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+    alignItems: 'center',
   },
-  statItem:  { flex: 1, alignItems: 'center' },
-  statValue: { fontSize: 24, fontWeight: '700', color: '#64c27b' },
-  statLabel: { fontSize: 11, color: '#6B7280', marginTop: 2, textTransform: 'uppercase', fontWeight: '600' },
+  statItem:    { flex: 1, alignItems: 'center' },
+  statValue:   { fontSize: 24, fontWeight: '700', color: '#64c27b' },
+  statLabel:   { fontSize: 11, color: '#6B7280', marginTop: 2, textTransform: 'uppercase', fontWeight: '600' },
+  statDivider: { width: 1, height: 32, backgroundColor: '#E5E7EB' },
 
+  // ── ActionBar ────────────────────────────────────────────────────────────────
+  actionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  viewToggleGroup: {
+    flexDirection: 'row',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+    padding: 3,
+  },
+  viewToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 6,
+  },
+  viewToggleBtnActive: {
+    backgroundColor: '#64c27b',
+    shadowColor: '#64c27b',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  viewToggleBtnTxt: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#9CA3AF',
+  },
+  viewToggleBtnTxtActive: {
+    color: '#fff',
+  },
+  // Placeholder for future action buttons (filter by client, sort, etc.)
+  actionBarRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 40,
+    minHeight: 36,
+  },
+
+  // ── Calendar (existing) ──────────────────────────────────────────────────────
   zoomControls: {
-    flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'center', paddingVertical: 8, gap: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    gap: 12,
   },
   zoomButton: { padding: 8 },
   zoomText:   { fontSize: 13, fontWeight: '600', color: '#6B7280', minWidth: 50, textAlign: 'center' },
-
   monthIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -960,36 +1364,20 @@ const styles = StyleSheet.create({
     color: '#374151',
     textTransform: 'capitalize',
   },
-
   calendarScroll: { flex: 1 },
   calendar:       { flexDirection: 'row' },
   hoursColumn:    { width: 60 },
-
   cornerButton: {
-    height:            72,
-    width:             60,
-    alignItems:        'center',
-    justifyContent:    'center',
-    backgroundColor:   '#1a1a2e',
-    borderBottomWidth: 3,
-    borderBottomColor: '#22C55E',
+    height: 72, width: 60,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#1a1a2e',
+    borderBottomWidth: 3, borderBottomColor: '#22C55E',
   },
-  cornerButtonDisabled: {
-    opacity: 0.5,
-  },
-
-  futureNavColumn: {
-    width:    60,
-    overflow: 'hidden',
-  },
-  futureColumnBody: {
-    flex:            1,
-    backgroundColor: 'rgba(59, 130, 246, 0.04)',
-  },
-
+  cornerButtonDisabled: { opacity: 0.5 },
+  futureNavColumn: { width: 60, overflow: 'hidden' },
+  futureColumnBody: { flex: 1, backgroundColor: 'rgba(59, 130, 246, 0.04)' },
   headerCell: {
-    height: 72,
-    justifyContent: 'center', alignItems: 'center',
+    height: 72, justifyContent: 'center', alignItems: 'center',
     borderBottomWidth: 2, borderBottomColor: '#E6E9EF', backgroundColor: '#fcf8f4ff',
     paddingVertical: 4,
   },
@@ -997,41 +1385,26 @@ const styles = StyleSheet.create({
   headerFuture:       { backgroundColor: '#EFF6FF' },
   headerToday:        { backgroundColor: '#DCFCE7', borderBottomColor: '#22C55E', borderBottomWidth: 3 },
   headerOutOfProject: { backgroundColor: '#F3F0FF', borderBottomColor: '#C4B5FD' },
-
   dayName:        { fontSize: 10, textTransform: 'uppercase', fontWeight: '700', letterSpacing: 0.4 },
   dayNamePast:    { color: '#9CA3AF' },
   dayNameFuture:  { color: '#60A5FA' },
   dayNameToday:   { color: '#15803D', fontSize: 11 },
-
   dayNumber:        { fontSize: 18, fontWeight: '700', marginTop: 1 },
   dayNumberPast:    { color: '#9CA3AF' },
   dayNumberFuture:  { color: '#3B82F6' },
-
   todayCircle: {
     width: 34, height: 34, borderRadius: 17,
-    backgroundColor: '#22C55E',
-    alignItems: 'center', justifyContent: 'center',
-    marginTop: 2,
-    shadowColor: '#22C55E',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.5,
-    shadowRadius: 4,
-    elevation: 4,
+    backgroundColor: '#22C55E', alignItems: 'center', justifyContent: 'center', marginTop: 2,
+    shadowColor: '#22C55E', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5, shadowRadius: 4, elevation: 4,
   },
   todayCircleText: { fontSize: 17, fontWeight: '800', color: '#fff' },
-
   dayMarkerRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 3, marginTop: 3, height: 14,
   },
-  dayMarker: {
-    width: 14, height: 14, borderRadius: 7,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  dayMarkerPast:   { backgroundColor: '#E5E7EB' },
-  dayMarkerFuture: { backgroundColor: '#DBEAFE' },
+  dayMarker:       { width: 14, height: 14, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
   dayMarkerCached: { backgroundColor: '#EDE9FE' },
-
   hourCell: {
     justifyContent: 'center', paddingRight: 8,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E6E9EF',
@@ -1047,10 +1420,12 @@ const styles = StyleSheet.create({
   },
   moreTasksText: { color: '#fff', fontSize: 10, fontWeight: '700' },
 
+  // ── Calendar empty state ─────────────────────────────────────────────────────
   emptyState:   { alignItems: 'center', justifyContent: 'center', paddingVertical: 60, paddingHorizontal: 20 },
   emptyText:    { fontSize: 16, fontWeight: '600', color: '#6B7280', marginTop: 16, textAlign: 'center' },
   emptySubtext: { fontSize: 13, color: '#9CA3AF', marginTop: 8, textAlign: 'center' },
 
+  // ── Day modal ────────────────────────────────────────────────────────────────
   dayModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
   dayModalContainer: {
     backgroundColor: '#fff', borderRadius: 16, maxHeight: '70%',
@@ -1061,14 +1436,323 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     padding: 16, borderBottomWidth: 1, borderBottomColor: '#E5E7EB',
   },
-  dayModalTitle:     { fontSize: 16, fontWeight: '700', color: '#111827', textTransform: 'capitalize' },
-  dayTaskItem:       { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 12 },
-  dayTaskTime:       { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  dayTaskTimeText:   { fontSize: 12, color: '#6B7280', fontWeight: '600' },
-  dayTaskTitle:      { flex: 1, fontSize: 14, fontWeight: '600', color: '#111827' },
-  dayTaskTitleDone:  { textDecorationLine: 'line-through', color: '#9CA3AF' },
-  dayTaskClient:     { fontSize: 12, color: '#9CA3AF', marginRight: 8 },
-  dayTaskSeparator:  { height: 1, backgroundColor: '#F3F4F6' },
-  emptyDayTasks:     { alignItems: 'center', justifyContent: 'center', paddingVertical: 40 },
-  emptyDayTasksText: { fontSize: 14, color: '#9CA3AF', marginTop: 12 },
+  dayModalTitle:    { fontSize: 16, fontWeight: '700', color: '#111827', textTransform: 'capitalize' },
+  dayTaskItem:      { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 12 },
+  dayTaskTime:      { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  dayTaskTimeText:  { fontSize: 12, color: '#6B7280', fontWeight: '600' },
+  dayTaskTitle:     { flex: 1, fontSize: 14, fontWeight: '600', color: '#111827' },
+  dayTaskTitleDone: { textDecorationLine: 'line-through', color: '#9CA3AF' },
+  dayTaskClient:    { fontSize: 12, color: '#9CA3AF', marginRight: 8 },
+  dayTaskSeparator: { height: 1, backgroundColor: '#F3F4F6' },
+  emptyDayTasks:    { alignItems: 'center', justifyContent: 'center', paddingVertical: 40 },
+  emptyDayTasksText:{ fontSize: 14, color: '#9CA3AF', marginTop: 12 },
+
+  // ── List View ────────────────────────────────────────────────────────────────
+  listViewContainer: {
+    // No extra padding here — the state section provides its own
+  },
+
+  // State cards strip
+  listStateSection: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+    paddingBottom: 10,
+    marginBottom: 0,
+  },
+  listStateScroll: {
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 4,
+    gap: 10,
+  },
+  listStateCard: {
+    width: 100,
+    minHeight: 82,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    borderTopWidth: 3,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    position: 'relative',
+  },
+  listStateCardActive: {
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  listStateCardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  listStateIndicator: { width: 7, height: 7, borderRadius: 4 },
+  listStateCardCount: { fontSize: 22, fontWeight: '800' },
+  listStateCardName:  { fontSize: 11, fontWeight: '600', color: '#6B7280', lineHeight: 15 },
+  // Active arrow indicator at bottom of card
+  listStateArrow: {
+    position: 'absolute',
+    bottom: -10,
+    left: '50%',
+    marginLeft: -6,
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 8,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    // borderTopColor set inline
+  },
+  listStateSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 10,
+  },
+  listStateSummaryText: { fontSize: 12, color: '#9CA3AF', fontWeight: '500' },
+  listClearAllBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  listClearAllTxt: { fontSize: 11, fontWeight: '600', color: '#EF4444' },
+
+  // Filter bar
+  listFilterBar: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  listFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  listFilterChipActive: {
+    backgroundColor: '#64c27b',
+    borderColor: '#64c27b',
+  },
+  listFilterChipTxt:       { fontSize: 12, fontWeight: '600', color: '#6B7280' },
+  listFilterChipTxtActive: { color: '#fff' },
+
+  // Search bar
+  listSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 16,
+    marginBottom: 4,
+    marginTop: 2,
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1.5,
+    borderColor: '#64c27b',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  listSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#111827',
+  },
+
+  // Pagination header
+  listPagHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#F9FAFB',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E7EB',
+  },
+  listActiveStatePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#fff',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  listActiveStateDot:  { width: 8, height: 8, borderRadius: 4 },
+  listActiveStateTxt:  { fontSize: 12, fontWeight: '600', color: '#374151' },
+  listPagCount:        { fontSize: 12, color: '#9CA3AF', fontWeight: '500' },
+
+  // Task list item
+  listItem: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+    minHeight: 72,
+  },
+  listItemDone: { opacity: 0.65 },
+  listItemStripe: { width: 3, borderRadius: 0 },
+  listItemBody: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    justifyContent: 'center',
+    gap: 4,
+  },
+  listItemTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  listItemTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+    lineHeight: 20,
+  },
+  listItemTitleDone: {
+    textDecorationLine: 'line-through',
+    color: '#9CA3AF',
+  },
+  listHistBadge: {
+    backgroundColor: '#FEF3C7',
+    borderRadius: 4,
+    padding: 3,
+    marginTop: 2,
+  },
+  listItemMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 2,
+  },
+  listMetaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  listMetaText: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    maxWidth: 110,
+  },
+  listMetaOverdue: {
+    color: '#EF4444',
+    fontWeight: '600',
+  },
+  listTagsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginTop: 4,
+  },
+  listTag: {
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  listTagText: { fontSize: 10, fontWeight: '600', color: '#15803d' },
+  listTagMore: { fontSize: 10, color: '#9CA3AF', alignSelf: 'center', marginLeft: 2 },
+  listItemStateIcon: {
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: '#F3F4F6',
+  },
+
+  // State groups
+  stateGroup: { marginBottom: 2 },
+  groupHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    backgroundColor: '#FAFAFA',
+    borderLeftWidth: 3,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  groupHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  groupDot:       { width: 8, height: 8, borderRadius: 4 },
+  groupHeaderLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#374151',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  groupCountBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  groupCountText: { fontSize: 12, fontWeight: '700' },
+
+  // Load more / group expand buttons
+  loadMoreBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    gap: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    backgroundColor: '#F9FAFB',
+  },
+  loadMoreBtnTxt:   { fontSize: 14, fontWeight: '600', color: '#64c27b' },
+  loadMoreBtnCount: { fontSize: 12, color: '#9CA3AF' },
+
+  groupLoadMoreBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    backgroundColor: '#F0FDF4',
+    borderTopWidth: 1,
+    borderTopColor: '#BBF7D0',
+  },
+  groupLoadMoreTxt: { fontSize: 13, fontWeight: '600', color: '#15803d' },
+
+  // List empty state
+  listEmptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 32,
+  },
+  listEmptyTitle:    { fontSize: 16, fontWeight: '700', color: '#6B7280', marginTop: 16 },
+  listEmptySubtitle: { fontSize: 13, color: '#9CA3AF', marginTop: 6, textAlign: 'center', lineHeight: 19 },
 });
