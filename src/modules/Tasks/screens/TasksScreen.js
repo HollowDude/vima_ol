@@ -13,6 +13,7 @@ import CreateTaskModal from '../../../core/components/CreateTaskModal';
 import ToastContainer from '../../../core/components/ToastContainer';
 import SlideMenu from '../../../core/components/SlideMenu';
 import ExpandableFAB from '../../../core/components/ExpandableFab';
+import SelectionModal from '../../../core/components/SelectionModal';
 import useNetwork from '../../../core/hooks/useNetwork';
 import useSyncActions from '../../../core/hooks/useSyncActions';
 import SyncService from '../../../core/sync/sync.service';
@@ -28,7 +29,6 @@ const INITIAL_PAST_DAYS   = 3;
 const INITIAL_FUTURE_DAYS = 3;
 const PAGE_SIZE           = 50;
 
-/** States that a project.task can be in, in display order. */
 const TASK_STATES = [
   { id: '01_in_progress',       label: 'En Proceso',     color: '#64c27b', icon: 'play'        },
   { id: '02_changes_requested', label: 'Cambios Solic.', color: '#F59E0B', icon: 'alert-circle' },
@@ -104,11 +104,8 @@ function TaskListItem({ task, tags, currentUserId, isHistorical, onPress }) {
       onPress={onPress}
       activeOpacity={0.7}
     >
-      {/* Priority stripe */}
       <View style={[styles.listItemStripe, { backgroundColor: pColor }]} />
-
       <View style={styles.listItemBody}>
-        {/* Row 1 — title + historical badge */}
         <View style={styles.listItemTitleRow}>
           <Text
             style={[styles.listItemTitle, isDone && styles.listItemTitleDone]}
@@ -122,8 +119,6 @@ function TaskListItem({ task, tags, currentUserId, isHistorical, onPress }) {
             </View>
           )}
         </View>
-
-        {/* Row 2 — meta chips: client, users, deadline */}
         <View style={styles.listItemMeta}>
           {clientName && (
             <View style={styles.listMetaChip}>
@@ -150,8 +145,6 @@ function TaskListItem({ task, tags, currentUserId, isHistorical, onPress }) {
             </View>
           )}
         </View>
-
-        {/* Row 3 — tag chips */}
         {taskTags.length > 0 && (
           <View style={styles.listTagsRow}>
             {taskTags.slice(0, 3).map(tag => (
@@ -165,8 +158,6 @@ function TaskListItem({ task, tags, currentUserId, isHistorical, onPress }) {
           </View>
         )}
       </View>
-
-      {/* State icon badge */}
       <View style={[styles.listItemStateIcon, { backgroundColor: stateInfo.color + '18' }]}>
         <Feather name={stateInfo.icon} size={14} color={stateInfo.color} />
       </View>
@@ -294,7 +285,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   const [managementTags, setManagementTags]     = useState([]);
 
   // ── View mode ────────────────────────────────────────────────────────────────
-  const [viewMode, setViewMode] = useState('calendar'); // 'calendar' | 'list'
+  const [viewMode, setViewMode] = useState('calendar');
 
   // ── List view filters ────────────────────────────────────────────────────────
   const [listStateFilter,   setListStateFilter]   = useState(null);
@@ -304,6 +295,11 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   const [listPriorityFilter,setListPriorityFilter] = useState(null);
   const [listTagFilter,     setListTagFilter]      = useState(null);
   const [listVisibleCount,  setListVisibleCount]   = useState(PAGE_SIZE);
+
+  // ── Client filter ─────────────────────────────────────────────────────────────
+  const [clientFilter,          setClientFilter]          = useState(null);
+  const [ownClients,            setOwnClients]            = useState([]);
+  const [showClientFilterModal, setShowClientFilterModal] = useState(false);
 
   // ── Calendar: days / extended tasks ─────────────────────────────────────────
   const [pastDays,   setPastDays]   = useState(INITIAL_PAST_DAYS);
@@ -339,9 +335,20 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
     return set;
   }, [extendedTasks]);
 
+  // ── Client-filtered tasks (applied to both calendar and list) ─────────────────
+  const clientFilteredTasks = useMemo(() => {
+    if (!clientFilter) return allVisibleTasks;
+    return allVisibleTasks.filter(task => {
+      const taskPartnerId = Array.isArray(task.partner_id)
+        ? task.partner_id[0]
+        : task.partner_id;
+      return taskPartnerId === clientFilter.id;
+    });
+  }, [allVisibleTasks, clientFilter]);
+
   // ── List view derived ─────────────────────────────────────────────────────────
   const listFilteredTasks = useMemo(() => {
-    let result = [...allVisibleTasks];
+    let result = [...clientFilteredTasks];
     if (listStateFilter) {
       result = result.filter(t => t.state === listStateFilter);
     }
@@ -361,7 +368,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
       );
     }
     return result;
-  }, [allVisibleTasks, listStateFilter, listSearch, listPriorityFilter, listTagFilter]);
+  }, [clientFilteredTasks, listStateFilter, listSearch, listPriorityFilter, listTagFilter]);
 
   const listGroupedTasks = useMemo(() => {
     if (listStateFilter) return null;
@@ -396,14 +403,16 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   // ── Data loading ─────────────────────────────────────────────────────────────
   const loadTasks = async () => {
     try {
-      const [result, tags] = await Promise.all([
+      const [result, tags, clients] = await Promise.all([
         SyncService.getAllVisibleTasks(),
         SyncService.getManagementTags(),
+        SyncService.getOwnClients(),
       ]);
 
       setAllTasks(result.tasks);
       setProjectId(result.projectId);
       setManagementTags(tags || []);
+      setOwnClients(clients || []);
 
       if (result.projectFinishDate) {
         setProjectDateEnd(result.projectFinishDate);
@@ -620,8 +629,9 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
     }
   };
 
+  // Uses clientFilteredTasks so the calendar respects the client filter
   const getTasksForDayAndHour = (dayDateString, hour) =>
-    allVisibleTasks.filter(task => {
+    clientFilteredTasks.filter(task => {
       const d = parseDeadline(task.date_deadline);
       return d && getLocalDateString(d) === dayDateString && d.getHours() === hour;
     });
@@ -640,7 +650,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   };
 
   const handleDayHeaderPress = (dayDateString) => {
-    const dayTasks = allVisibleTasks.filter(task => {
+    const dayTasks = clientFilteredTasks.filter(task => {
       const d = parseDeadline(task.date_deadline);
       return d && getLocalDateString(d) === dayDateString;
     });
@@ -660,14 +670,14 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
     }
   };
 
-  // ── Stats ─────────────────────────────────────────────────────────────────────
-  const activeCount = allVisibleTasks.filter(t =>
+  // ── Stats (use clientFilteredTasks so numbers reflect the filter) ─────────────
+  const activeCount = clientFilteredTasks.filter(t =>
     ['01_in_progress', '02_changes_requested', '03_approved', '04_waiting_normal'].includes(t.state),
   ).length;
-  const doneCount = allVisibleTasks.filter(t => t.state === '1_done').length;
+  const doneCount = clientFilteredTasks.filter(t => t.state === '1_done').length;
 
   // ── List view helpers ─────────────────────────────────────────────────────────
-  const getStateCount = (stateId) => allVisibleTasks.filter(t => t.state === stateId).length;
+  const getStateCount = (stateId) => clientFilteredTasks.filter(t => t.state === stateId).length;
 
   const toggleGroup = (stateId) => {
     setListCollapsed(prev => ({ ...prev, [stateId]: !prev[stateId] }));
@@ -684,7 +694,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
 
   const hasActiveListFilters = !!(listStateFilter || listSearch.trim() || listPriorityFilter || listTagFilter);
 
-  // ── Render: ActionBar (view toggle + future actions placeholder) ───────────────
+  // ── renderActionBar ────────────────────────────────────────────────────────────
   const renderActionBar = () => (
     <View style={styles.actionBar}>
       {/* View toggle */}
@@ -711,10 +721,28 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
         </TouchableOpacity>
       </View>
 
-      {/* ── Placeholder: future quick actions (filter by client, sort, etc.) ── */}
-      <View style={styles.actionBarRight}>
-        {/* Future actions will appear here */}
-      </View>
+      {/* Client filter button */}
+      <TouchableOpacity
+        style={[styles.clientFilterBtn, clientFilter && styles.clientFilterBtnActive]}
+        onPress={() => setShowClientFilterModal(true)}
+        activeOpacity={0.8}
+      >
+        <Feather name="user" size={13} color={clientFilter ? '#fff' : '#6B7280'} />
+        <Text
+          style={[styles.clientFilterBtnTxt, clientFilter && styles.clientFilterBtnTxtActive]}
+          numberOfLines={1}
+        >
+          {clientFilter ? clientFilter.name : 'Cliente'}
+        </Text>
+        {clientFilter && (
+          <TouchableOpacity
+            onPress={() => setClientFilter(null)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Feather name="x" size={12} color="#fff" />
+          </TouchableOpacity>
+        )}
+      </TouchableOpacity>
     </View>
   );
 
@@ -728,7 +756,6 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
 
     return (
       <View style={styles.listViewContainer}>
-
         {/* ── 1. State cards strip ─────────────────────────────────────── */}
         <View style={styles.listStateSection}>
           <ScrollView
@@ -767,10 +794,10 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
             })}
           </ScrollView>
 
-          {/* Summary row */}
           <View style={styles.listStateSummaryRow}>
             <Text style={styles.listStateSummaryText}>
-              {allVisibleTasks.length} tarea{allVisibleTasks.length !== 1 ? 's' : ''} en total
+              {clientFilteredTasks.length} tarea{clientFilteredTasks.length !== 1 ? 's' : ''}
+              {clientFilter ? ` de ${clientFilter.name}` : ' en total'}
             </Text>
             {hasActiveListFilters && (
               <TouchableOpacity style={styles.listClearAllBtn} onPress={clearAllListFilters}>
@@ -783,7 +810,6 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
 
         {/* ── 2. Filter bar ────────────────────────────────────────────── */}
         <View style={styles.listFilterBar}>
-          {/* Search toggle */}
           <TouchableOpacity
             style={[styles.listFilterChip, listSearchVisible && styles.listFilterChipActive]}
             onPress={() => {
@@ -797,7 +823,6 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
             </Text>
           </TouchableOpacity>
 
-          {/* Priority filters */}
           {PRIORITY_OPTS.map(p => (
             <TouchableOpacity
               key={p.id}
@@ -820,7 +845,6 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
             </TouchableOpacity>
           ))}
 
-          {/* Tag filter — cycle through available tags */}
           {managementTags.length > 0 && (
             <TouchableOpacity
               style={[styles.listFilterChip, listTagFilter != null && styles.listFilterChipActive]}
@@ -869,7 +893,6 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
         <View style={styles.listPagHeader}>
           {listStateFilter ? (
             <>
-              {/* Active state label with dismiss */}
               <View style={styles.listActiveStatePill}>
                 <View style={[styles.listActiveStateDot, {
                   backgroundColor: TASK_STATES.find(s => s.id === listStateFilter)?.color,
@@ -884,7 +907,6 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                   <Feather name="x" size={13} color="#6B7280" />
                 </TouchableOpacity>
               </View>
-              {/* Pagination: 1–N / Total */}
               <Text style={styles.listPagCount}>
                 {showingFrom}–{showingTo} / {total}
               </Text>
@@ -903,15 +925,16 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
             <Feather name="inbox" size={40} color="#D1D5DB" />
             <Text style={styles.listEmptyTitle}>Sin resultados</Text>
             <Text style={styles.listEmptySubtitle}>
-              {hasActiveListFilters
+              {clientFilter
+                ? `No hay tareas para ${clientFilter.name}${hasActiveListFilters ? ' con estos filtros.' : '.'}`
+                : hasActiveListFilters
                 ? 'Prueba cambiando o eliminando los filtros activos.'
                 : 'No hay tareas disponibles para el proyecto actual.'}
             </Text>
           </View>
         ) : listStateFilter ? (
-          /* ── Flat list when a state is selected ── */
           <View>
-            {flatVisible.map((task, idx) => (
+            {flatVisible.map((task) => (
               <TaskListItem
                 key={task.id}
                 task={task}
@@ -937,7 +960,6 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
             )}
           </View>
         ) : (
-          /* ── Grouped by state (collapsible) ── */
           listGroupedTasks.map(({ state, tasks: groupTasks }) => {
             const isCollapsed     = !!listCollapsed[state.id];
             const visibleInGroup  = isCollapsed ? [] : groupTasks.slice(0, PAGE_SIZE);
@@ -985,7 +1007,6 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
           })
         )}
 
-        {/* Bottom padding */}
         <View style={{ height: 32 }} />
       </View>
     );
@@ -1041,18 +1062,17 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
               </View>
               <View style={styles.statDivider} />
               <View style={styles.statItem}>
-                <Text style={styles.statValue}>{allVisibleTasks.length}</Text>
+                <Text style={styles.statValue}>{clientFilteredTasks.length}</Text>
                 <Text style={styles.statLabel}>Total</Text>
               </View>
             </View>
 
-            {/* ── ActionBar: view toggle + future quick actions ── */}
+            {/* ── ActionBar: view toggle + client filter ── */}
             {renderActionBar()}
 
             {/* ── Calendar view ── */}
             {viewMode === 'calendar' && (
               <>
-                {/* Zoom controls */}
                 <View style={styles.zoomControls}>
                   <TouchableOpacity
                     style={styles.zoomButton}
@@ -1069,15 +1089,21 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                   </TouchableOpacity>
                 </View>
 
-                {/* Month indicator */}
                 {visibleMonth !== '' && (
                   <View style={styles.monthIndicator}>
                     <Feather name="calendar" size={13} color="#64c27b" />
                     <Text style={styles.monthIndicatorText}>{visibleMonth}</Text>
+                    {clientFilter && (
+                      <View style={styles.calendarClientBadge}>
+                        <Feather name="user" size={11} color="#fff" />
+                        <Text style={styles.calendarClientBadgeText} numberOfLines={1}>
+                          {clientFilter.name}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                 )}
 
-                {/* Calendar grid */}
                 <ScrollView
                   horizontal
                   ref={scrollViewRef}
@@ -1222,11 +1248,19 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                   </View>
                 </ScrollView>
 
-                {allVisibleTasks.length === 0 && !loadingExtended && (
+                {clientFilteredTasks.length === 0 && !loadingExtended && (
                   <View style={styles.emptyState}>
                     <Feather name="calendar" size={48} color="#D1D5DB" />
-                    <Text style={styles.emptyText}>No tienes tareas programadas</Text>
-                    <Text style={styles.emptySubtext}>Toca el botón + para crear una nueva</Text>
+                    <Text style={styles.emptyText}>
+                      {clientFilter
+                        ? `No hay tareas para ${clientFilter.name}`
+                        : 'No tienes tareas programadas'}
+                    </Text>
+                    <Text style={styles.emptySubtext}>
+                      {clientFilter
+                        ? 'Prueba quitando el filtro de cliente'
+                        : 'Toca el botón + para crear una nueva'}
+                    </Text>
                   </View>
                 )}
               </>
@@ -1236,6 +1270,19 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
             {viewMode === 'list' && renderListView()}
           </Card>
         </ScrollView>
+
+        {/* Client filter modal */}
+        <SelectionModal
+          visible={showClientFilterModal}
+          title="Filtrar por Cliente"
+          data={ownClients}
+          onSelect={(client) => {
+            setClientFilter(client);
+            setShowClientFilterModal(false);
+          }}
+          onClose={() => setShowClientFilterModal(false)}
+          selectedIds={clientFilter ? [clientFilter.id] : []}
+        />
 
         {/* Modals */}
         <DayTasksModal
@@ -1273,7 +1320,6 @@ const styles = StyleSheet.create({
   scrollContent: { padding: 16, paddingTop: 80, paddingBottom: 140 },
   mainCard:      { marginBottom: 16 },
 
-  // ── Stats bar ────────────────────────────────────────────────────────────────
   statsBar: {
     flexDirection: 'row',
     paddingHorizontal: 16,
@@ -1293,11 +1339,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     paddingVertical: 10,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6',
+    gap: 8,
   },
   viewToggleGroup: {
     flexDirection: 'row',
@@ -1309,7 +1356,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 6,
   },
@@ -1321,24 +1368,54 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  viewToggleBtnTxt: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#9CA3AF',
-  },
-  viewToggleBtnTxtActive: {
-    color: '#fff',
-  },
-  // Placeholder for future action buttons (filter by client, sort, etc.)
-  actionBarRight: {
+  viewToggleBtnTxt:       { fontSize: 13, fontWeight: '600', color: '#9CA3AF' },
+  viewToggleBtnTxtActive: { color: '#fff' },
+
+  // ── Client filter button ──────────────────────────────────────────────────────
+  clientFilterBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    minWidth: 40,
-    minHeight: 36,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    maxWidth: 140,
+    flex: 1,
+  },
+  clientFilterBtnActive: {
+    backgroundColor: '#64c27b',
+    borderColor: '#64c27b',
+  },
+  clientFilterBtnTxt: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6B7280',
+    flex: 1,
+  },
+  clientFilterBtnTxtActive: { color: '#fff' },
+
+  // ── Calendar month indicator badge ────────────────────────────────────────────
+  calendarClientBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#64c27b',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginLeft: 8,
+    maxWidth: 120,
+  },
+  calendarClientBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#fff',
   },
 
-  // ── Calendar (existing) ──────────────────────────────────────────────────────
+  // ── Calendar ──────────────────────────────────────────────────────────────────
   zoomControls: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1420,7 +1497,6 @@ const styles = StyleSheet.create({
   },
   moreTasksText: { color: '#fff', fontSize: 10, fontWeight: '700' },
 
-  // ── Calendar empty state ─────────────────────────────────────────────────────
   emptyState:   { alignItems: 'center', justifyContent: 'center', paddingVertical: 60, paddingHorizontal: 20 },
   emptyText:    { fontSize: 16, fontWeight: '600', color: '#6B7280', marginTop: 16, textAlign: 'center' },
   emptySubtext: { fontSize: 13, color: '#9CA3AF', marginTop: 8, textAlign: 'center' },
@@ -1448,16 +1524,11 @@ const styles = StyleSheet.create({
   emptyDayTasksText:{ fontSize: 14, color: '#9CA3AF', marginTop: 12 },
 
   // ── List View ────────────────────────────────────────────────────────────────
-  listViewContainer: {
-    // No extra padding here — the state section provides its own
-  },
-
-  // State cards strip
+  listViewContainer: {},
   listStateSection: {
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
     paddingBottom: 10,
-    marginBottom: 0,
   },
   listStateScroll: {
     paddingHorizontal: 16,
@@ -1492,7 +1563,6 @@ const styles = StyleSheet.create({
   listStateIndicator: { width: 7, height: 7, borderRadius: 4 },
   listStateCardCount: { fontSize: 22, fontWeight: '800' },
   listStateCardName:  { fontSize: 11, fontWeight: '600', color: '#6B7280', lineHeight: 15 },
-  // Active arrow indicator at bottom of card
   listStateArrow: {
     position: 'absolute',
     bottom: -10,
@@ -1505,7 +1575,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 8,
     borderLeftColor: 'transparent',
     borderRightColor: 'transparent',
-    // borderTopColor set inline
   },
   listStateSummaryRow: {
     flexDirection: 'row',
@@ -1528,7 +1597,6 @@ const styles = StyleSheet.create({
   },
   listClearAllTxt: { fontSize: 11, fontWeight: '600', color: '#EF4444' },
 
-  // Filter bar
   listFilterBar: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1549,14 +1617,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
-  listFilterChipActive: {
-    backgroundColor: '#64c27b',
-    borderColor: '#64c27b',
-  },
+  listFilterChipActive:    { backgroundColor: '#64c27b', borderColor: '#64c27b' },
   listFilterChipTxt:       { fontSize: 12, fontWeight: '600', color: '#6B7280' },
   listFilterChipTxtActive: { color: '#fff' },
 
-  // Search bar
   listSearchBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1571,13 +1635,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
-  listSearchInput: {
-    flex: 1,
-    fontSize: 14,
-    color: '#111827',
-  },
+  listSearchInput: { flex: 1, fontSize: 14, color: '#111827' },
 
-  // Pagination header
   listPagHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1599,11 +1658,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
-  listActiveStateDot:  { width: 8, height: 8, borderRadius: 4 },
-  listActiveStateTxt:  { fontSize: 12, fontWeight: '600', color: '#374151' },
-  listPagCount:        { fontSize: 12, color: '#9CA3AF', fontWeight: '500' },
+  listActiveStateDot: { width: 8, height: 8, borderRadius: 4 },
+  listActiveStateTxt: { fontSize: 12, fontWeight: '600', color: '#374151' },
+  listPagCount:       { fontSize: 12, color: '#9CA3AF', fontWeight: '500' },
 
-  // Task list item
   listItem: {
     flexDirection: 'row',
     alignItems: 'stretch',
@@ -1612,7 +1670,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F3F4F6',
     minHeight: 72,
   },
-  listItemDone: { opacity: 0.65 },
+  listItemDone:   { opacity: 0.65 },
   listItemStripe: { width: 3, borderRadius: 0 },
   listItemBody: {
     flex: 1,
@@ -1621,54 +1679,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 4,
   },
-  listItemTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-  },
-  listItemTitle: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#111827',
-    lineHeight: 20,
-  },
-  listItemTitleDone: {
-    textDecorationLine: 'line-through',
-    color: '#9CA3AF',
-  },
-  listHistBadge: {
-    backgroundColor: '#FEF3C7',
-    borderRadius: 4,
-    padding: 3,
-    marginTop: 2,
-  },
-  listItemMeta: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 2,
-  },
-  listMetaChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-  },
-  listMetaText: {
-    fontSize: 11,
-    color: '#9CA3AF',
-    maxWidth: 110,
-  },
-  listMetaOverdue: {
-    color: '#EF4444',
-    fontWeight: '600',
-  },
-  listTagsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
-    marginTop: 4,
-  },
+  listItemTitleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  listItemTitle: { flex: 1, fontSize: 14, fontWeight: '600', color: '#111827', lineHeight: 20 },
+  listItemTitleDone: { textDecorationLine: 'line-through', color: '#9CA3AF' },
+  listHistBadge: { backgroundColor: '#FEF3C7', borderRadius: 4, padding: 3, marginTop: 2 },
+  listItemMeta:  { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 2 },
+  listMetaChip:  { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  listMetaText:  { fontSize: 11, color: '#9CA3AF', maxWidth: 110 },
+  listMetaOverdue: { color: '#EF4444', fontWeight: '600' },
+  listTagsRow:   { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 },
   listTag: {
     backgroundColor: '#f0fdf4',
     borderWidth: 1,
@@ -1687,7 +1706,6 @@ const styles = StyleSheet.create({
     borderLeftColor: '#F3F4F6',
   },
 
-  // State groups
   stateGroup: { marginBottom: 2 },
   groupHeader: {
     flexDirection: 'row',
@@ -1700,27 +1718,15 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
-  groupHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  groupDot:       { width: 8, height: 8, borderRadius: 4 },
+  groupHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  groupDot:        { width: 8, height: 8, borderRadius: 4 },
   groupHeaderLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#374151',
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
+    fontSize: 13, fontWeight: '700', color: '#374151',
+    textTransform: 'uppercase', letterSpacing: 0.4,
   },
-  groupCountBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-  },
-  groupCountText: { fontSize: 12, fontWeight: '700' },
+  groupCountBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
+  groupCountText:  { fontSize: 12, fontWeight: '700' },
 
-  // Load more / group expand buttons
   loadMoreBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1746,7 +1752,6 @@ const styles = StyleSheet.create({
   },
   groupLoadMoreTxt: { fontSize: 13, fontWeight: '600', color: '#15803d' },
 
-  // List empty state
   listEmptyState: {
     alignItems: 'center',
     justifyContent: 'center',
