@@ -3,6 +3,8 @@ import {
   View, Text, StyleSheet, Modal, Animated, PanResponder, Dimensions,
   TouchableOpacity, ScrollView, Alert, Platform, TextInput, ActivityIndicator
 } from 'react-native';
+import { Linking } from 'react-native';
+import { getSurveyUrl } from '../utils/surveyHelper';
 import { Feather } from '@expo/vector-icons';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 
@@ -161,17 +163,54 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
     try {
       setLoadingSurveys(true);
       const surveys = await SyncService.getSurveysForTask(task.id);
+      
       const enrichedSurveys = await Promise.all(surveys.map(async (s) => {
         const localProgress = await SyncService.getSurveyProgress(task.id, s.id, s.relation_id);
         let isCompleted = !!s.survey_user_input_id;
         if (localProgress?.state === 'done') isCompleted = true;
-        return { ...s, isCompleted, localProgress };
+        
+        // ✅ Construir URL usando el helper
+        const surveyUrl = getSurveyUrl(s);
+
+        console.log(`📋 Survey "${s.title}" (ID: ${s.id})`, {
+          has_access_token: !!s.access_token,
+          has_user_input: !!s.user_input,
+          user_input_token: s.user_input?.access_token ? '***' : 'N/A',
+          url: surveyUrl,
+          isCompleted
+        });
+
+        return { ...s, isCompleted, localProgress, surveyUrl };
       }));
+      
       setTaskSurveys(enrichedSurveys);
     } catch (error) {
       console.error("Error cargando encuestas:", error);
-    } finally { setLoadingSurveys(false); }
+    } finally { 
+      setLoadingSurveys(false); 
+    }
   };
+
+
+const handleOpenSurveyInWeb = async (surveyUrl) => {
+  if (!surveyUrl) {
+    Alert.alert('Error', 'No se pudo obtener la URL de la encuesta');
+    return;
+  }
+
+  try {
+    const canOpen = await Linking.canOpenURL(surveyUrl);
+    if (canOpen) {
+      await Linking.openURL(surveyUrl);
+    } else {
+      Alert.alert('Error', 'No se puede abrir la URL en el navegador');
+    }
+  } catch (error) {
+    console.error('Error abriendo URL:', error);
+    Alert.alert('Error', 'No se pudo abrir la encuesta: ' + error.message);
+  }
+};
+
 
   const loadTags = async () => {
     try {
@@ -546,34 +585,58 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
 
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.surveyListContent}>
                   {taskSurveys.map((survey, index) => (
-                    <TouchableOpacity
+                    <View
                       key={survey.relation_id || `${survey.id}-${index}`}
-                      style={[
-                        styles.surveyCard,
-                        survey.isCompleted ? styles.surveyCardDone : styles.surveyCardPending,
-                        isHistorical && styles.surveyCardDisabled,
-                      ]}
-                      onPress={isHistorical ? undefined : () => handleOpenSurvey(survey)}
-                      activeOpacity={isHistorical ? 1 : 0.7}
+                      style={styles.surveyCardWrapper}
                     >
-                      <View style={styles.surveyCardTop}>
-                        <Feather
-                          name={isHistorical ? 'lock' : (survey.isCompleted ? 'check-circle' : 'clipboard')}
-                          size={24}
-                          color={isHistorical ? '#9CA3AF' : (survey.isCompleted ? '#10B981' : '#F59E0B')}
-                        />
-                        {survey.isCompleted && !isHistorical && (
-                          <View style={styles.editBadge}>
-                            <Feather name="edit-2" size={10} color="#15803d" />
-                            <Text style={styles.editBadgeText}>Editar</Text>
-                          </View>
-                        )}
-                      </View>
-                      <Text style={styles.surveyTitle} numberOfLines={2}>{survey.title}</Text>
-                      <Text style={[styles.surveyStatusText, isHistorical && { color: '#9CA3AF' }]}>
-                        {isHistorical ? 'No disponible' : (survey.isCompleted ? 'Completada' : 'Pendiente')}
-                      </Text>
-                    </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[
+                          styles.surveyCard,
+                          survey.isCompleted ? styles.surveyCardDone : styles.surveyCardPending,
+                          isHistorical && styles.surveyCardDisabled,
+                        ]}
+                        onPress={isHistorical ? undefined : () => handleOpenSurvey(survey)}
+                        activeOpacity={isHistorical ? 1 : 0.7}
+                      >
+                        <View style={styles.surveyCardTop}>
+                          <Feather
+                            name={isHistorical ? 'lock' : (survey.isCompleted ? 'check-circle' : 'clipboard')}
+                            size={24}
+                            color={isHistorical ? '#9CA3AF' : (survey.isCompleted ? '#10B981' : '#F59E0B')}
+                          />
+                          {survey.isCompleted && !isHistorical && (
+                            <View style={styles.editBadge}>
+                              <Feather name="edit-2" size={10} color="#15803d" />
+                              <Text style={styles.editBadgeText}>Editar</Text>
+                            </View>
+                          )}
+                        </View>
+                        <Text style={styles.surveyTitle} numberOfLines={2}>{survey.title}</Text>
+                        <Text style={[styles.surveyStatusText, isHistorical && { color: '#9CA3AF' }]}>
+                          {isHistorical ? 'No disponible' : (survey.isCompleted ? 'Completada' : 'Pendiente')}
+                        </Text>
+                      </TouchableOpacity>
+
+                      {/* ✅ Botón para abrir en web */}
+                      {survey.surveyUrl && (
+                        <TouchableOpacity
+                          style={[
+                            styles.surveyWebButton,
+                            !isOnline && styles.surveyWebButtonDisabled,
+                            isHistorical && styles.surveyWebButtonDisabled,
+                          ]}
+                          onPress={() => handleOpenSurveyInWeb(survey.surveyUrl)}
+                          disabled={!isOnline || isHistorical}
+                          activeOpacity={isOnline && !isHistorical ? 0.7 : 1}
+                        >
+                          <Feather 
+                            name="external-link" 
+                            size={14} 
+                            color={isOnline && !isHistorical ? "#64c27b" : "#D1D5DB"} 
+                          />
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   ))}
                 </ScrollView>
               </View>
@@ -1006,4 +1069,28 @@ const styles = StyleSheet.create({
   completeTaskButtonText:       { fontSize: 16, fontWeight: '700', color: '#fff' },
 
   commentsSection: { minHeight: 300, maxHeight: 500 },
+  surveyWebButtonDisabled: {
+    backgroundColor: '#F3F4F6',
+    opacity: 0.5,
+  },
+  surveyCardWrapper: {
+    position: 'relative',
+    marginRight: 12,
+  },
+  surveyWebButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#f0fdf4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
+    elevation: 2,
+  },
 });

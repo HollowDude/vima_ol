@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView,
-  TextInput, Alert, ActivityIndicator, Dimensions, TouchableWithoutFeedback, Platform
+  TextInput, Alert, ActivityIndicator, Dimensions, TouchableWithoutFeedback, Platform, Linking
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Slider from '@react-native-community/slider';
 import SyncService from '../sync/sync.service';
+import useNetwork from '../hooks/useNetwork';
+import { getSurveyUrl } from '../utils/surveyHelper';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -19,6 +21,10 @@ function QuestionCard({
   onPrev,
   onNext,
   onClose,
+  onOpenWeb,
+  isOnline,
+  surveyUrl,
+
 }) {
   const [localAnswer, setLocalAnswer] = useState({});
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -556,10 +562,35 @@ function QuestionCard({
               />
             </View>
           </View>
-          <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-            <Feather name="x" size={20} color="#6B7280" />
-          </TouchableOpacity>
+          <View style={styles.headerRightActions}>
+            {surveyUrl && (
+              <TouchableOpacity 
+                onPress={onOpenWeb}
+                disabled={!isOnline}
+                style={[styles.webButton, !isOnline && styles.webButtonDisabled]}
+                activeOpacity={isOnline ? 0.7 : 1}
+              >
+                <Feather 
+                  name="external-link" 
+                  size={16} 
+                  color={isOnline ? "#64c27b" : "#D1D5DB"} 
+                />
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+              <Feather name="x" size={20} color="#6B7280" />
+            </TouchableOpacity>
+          </View>
         </View>
+
+        {surveyUrl && !isOnline && (
+          <View style={styles.offlineBanner}>
+            <Feather name="wifi-off" size={14} color="#B45309" />
+            <Text style={styles.offlineBannerText}>
+              Necesitas conexión para abrir la encuesta en web
+            </Text>
+          </View>
+        )}
 
         <ScrollView 
           style={styles.questionScroll} 
@@ -609,12 +640,14 @@ function QuestionCard({
 }
 
 export default function SurveyModal({ visible, taskId, surveyId, relationId, onClose, onComplete }) {
+  const { isOnline } = useNetwork();
   const [loading, setLoading] = useState(true);
   const [survey, setSurvey] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [answers, setAnswers] = useState({});
   const [userInputId, setUserInputId] = useState(null);
+  const [surveyUrl, setSurveyUrl] = useState(null);
 
   useEffect(() => {
     if (visible && surveyId) {
@@ -626,19 +659,32 @@ export default function SurveyModal({ visible, taskId, surveyId, relationId, onC
     try {
       setLoading(true);
 
-      const surveyData = await SyncService.getSurveyById(surveyId);
-      const questionsData = await SyncService.getSurveyQuestions(surveyId);
+      // Obtener survey completo con user_input
+      const surveys = await SyncService.getSurveysForTask(taskId);
+      const surveyData = surveys.find(s => s.id === surveyId);
       
       if (!surveyData) {
         throw new Error('Encuesta no encontrada');
       }
 
+      const questionsData = await SyncService.getSurveyQuestions(surveyId);
+      
       if (!questionsData || questionsData.length === 0) {
         throw new Error('No hay preguntas en esta encuesta');
       }
       
       setSurvey(surveyData);
       setQuestions(questionsData);
+
+      // ✅ Construir URL usando el helper
+      const url = getSurveyUrl(surveyData);
+      setSurveyUrl(url);
+      
+      if (url) {
+        console.log('✅ URL de encuesta construida:', url);
+      } else {
+        console.warn('⚠️ No se pudo construir URL de encuesta');
+      }
 
       const existingInput = await SyncService.getSurveyProgress(taskId, surveyId, relationId);
       
@@ -662,6 +708,25 @@ export default function SurveyModal({ visible, taskId, surveyId, relationId, onC
       onClose();
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleOpenWebSurvey = async () => {
+    if (!surveyUrl) {
+      Alert.alert('Error', 'No se pudo obtener la URL de la encuesta');
+      return;
+    }
+
+    try {
+      const canOpen = await Linking.canOpenURL(surveyUrl);
+      if (canOpen) {
+        await Linking.openURL(surveyUrl);
+      } else {
+        Alert.alert('Error', 'No se puede abrir la URL en el navegador');
+      }
+    } catch (error) {
+      console.error('Error abriendo URL:', error);
+      Alert.alert('Error', 'No se pudo abrir la encuesta: ' + error.message);
     }
   };
 
@@ -829,6 +894,10 @@ export default function SurveyModal({ visible, taskId, surveyId, relationId, onC
                   onPrev={handlePrev}
                   onNext={handleNext}
                   onClose={handleBackdropPress}
+                  // Props para botón web
+                  onOpenWeb={handleOpenWebSurvey}
+                  isOnline={isOnline}
+                  surveyUrl={surveyUrl}
                 />
               )}
             </View>
@@ -1216,5 +1285,67 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 15,
     fontWeight: '700',
+  },
+  headerRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  webButton: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#f0fdf4',
+    marginRight: 4,
+  },
+  webButtonDisabled: {
+    backgroundColor: '#F3F4F6',
+    opacity: 0.6,
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FFFBEB',
+    borderBottomWidth: 1,
+    borderBottomColor: '#FCD34D',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  offlineBannerText: {
+    fontSize: 12,
+    color: '#B45309',
+    fontWeight: '500',
+    flex: 1,
+  },
+  headerRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  webButton: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#f0fdf4',
+    marginRight: 4,
+  },
+  webButtonDisabled: {
+    backgroundColor: '#F3F4F6',
+    opacity: 0.6,
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FFFBEB',
+    borderBottomWidth: 1,
+    borderBottomColor: '#FCD34D',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  offlineBannerText: {
+    fontSize: 12,
+    color: '#B45309',
+    fontWeight: '500',
+    flex: 1,
   },
 });

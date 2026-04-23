@@ -5,7 +5,6 @@ import { addPendingChange } from './sync.pending';
 
 export async function syncSurveys() {
   try {
-    
     const tasks = await StorageService.getItem(STORAGE_KEYS.TASKS) || [];
     
     const relationIds = [];
@@ -20,14 +19,18 @@ export async function syncSurveys() {
       await StorageService.setItem(STORAGE_KEYS.SURVEY_RELS, []);
       await StorageService.setItem(STORAGE_KEYS.SURVEY_QUESTIONS, []);
       await StorageService.setItem(STORAGE_KEYS.SURVEY_ANSWERS, []);
+      await StorageService.setItem(STORAGE_KEYS.SURVEY_USER_INPUTS, []);
       return;
     }
 
+    // ✅ Obtener relaciones con el survey_user_input_id
     const relations = await OdooService.searchRead(
       'project.task.survey.rel',
       [['id', 'in', relationIds]],
-      ['id', 'task_id', 'survey_id', 'survey_user_input_id', 'public_url']
+      ['id', 'task_id', 'survey_id', 'survey_user_input_id']
     );
+
+    console.log('📋 Relaciones de encuesta obtenidas:', relations.length);
 
     await StorageService.setItem(STORAGE_KEYS.SURVEY_RELS, relations);
 
@@ -39,11 +42,52 @@ export async function syncSurveys() {
       return;
     }
 
+    // ✅ Obtener surveys con access_token
     const surveys = await OdooService.searchRead(
       'survey.survey',
       [['id', 'in', surveyIds]],
-      ['id', 'title', 'description', 'description_done', 'question_ids']
+      [
+        'id', 
+        'title', 
+        'description', 
+        'description_done', 
+        'question_ids',
+        'access_token',  // Token del survey
+        'access_mode',
+      ]
     );
+
+    console.log('📊 Surveys obtenidas:', surveys.length);
+
+    // ✅ Obtener los user_input (respuestas) si existen
+    const userInputIds = relations
+      .map(r => {
+        if (r.survey_user_input_id) {
+          return Array.isArray(r.survey_user_input_id) 
+            ? r.survey_user_input_id[0] 
+            : r.survey_user_input_id;
+        }
+        return null;
+      })
+      .filter(id => id && id > 0); // Solo IDs reales (no false ni negativos)
+
+    let userInputs = [];
+    if (userInputIds.length > 0) {
+      console.log('🔍 Obteniendo user inputs:', userInputIds);
+      userInputs = await OdooService.searchRead(
+        'survey.user_input',
+        [['id', 'in', userInputIds]],
+        [
+          'id',
+          'access_token',  // Token de la respuesta específica
+          'survey_id',
+          'state',
+        ]
+      );
+      console.log('✅ User inputs obtenidos:', userInputs.length);
+    }
+
+    await StorageService.setItem(STORAGE_KEYS.SURVEY_USER_INPUTS, userInputs);
 
     const questionIds = [];
     surveys.forEach(survey => {
@@ -112,21 +156,17 @@ export async function syncSurveys() {
     await StorageService.setItem(STORAGE_KEYS.SURVEY_QUESTIONS, enrichedQuestions);
     await StorageService.setItem(STORAGE_KEYS.SURVEY_ANSWERS, allAnswers);
 
-    } catch (error) {
-    console.error(' Error sincronizando encuestas:', error);
+  } catch (error) {
+    console.error('❌ Error sincronizando encuestas:', error);
     throw error;
   }
-}
-
-export async function getSurveyById(id) {
-  const surveys = await StorageService.getItem(STORAGE_KEYS.SURVEYS) || [];
-  return surveys.find(s => s.id === id) || null;
 }
 
 export async function getSurveysForTask(taskId) {
   try {
     const relations = await StorageService.getItem(STORAGE_KEYS.SURVEY_RELS) || [];
     const surveys = await StorageService.getItem(STORAGE_KEYS.SURVEYS) || [];
+    const userInputs = await StorageService.getItem(STORAGE_KEYS.SURVEY_USER_INPUTS) || [];
     
     const taskRelations = relations.filter(r => {
       const rTaskId = Array.isArray(r.task_id) ? r.task_id[0] : r.task_id;
@@ -141,18 +181,32 @@ export async function getSurveysForTask(taskId) {
         return null;
       }
 
+      // Obtener user_input si existe
+      const userInputId = rel.survey_user_input_id 
+        ? (Array.isArray(rel.survey_user_input_id) ? rel.survey_user_input_id[0] : rel.survey_user_input_id)
+        : null;
+
+      const userInput = userInputId 
+        ? userInputs.find(ui => ui.id === userInputId)
+        : null;
+
       return {
         ...surveyData,
         relation_id: rel.id,
-        survey_user_input_id: Array.isArray(rel.survey_user_input_id) 
-          ? rel.survey_user_input_id[0] 
-          : rel.survey_user_input_id
+        survey_user_input_id: userInputId,
+        user_input: userInput,  // ✅ Incluir los datos del user_input
       };
     }).filter(Boolean);
   } catch (error) {
     console.error('❌ Error obteniendo encuestas de tarea:', error);
     return [];
   }
+}
+
+
+export async function getSurveyById(id) {
+  const surveys = await StorageService.getItem(STORAGE_KEYS.SURVEYS) || [];
+  return surveys.find(s => s.id === id) || null;
 }
 
 export async function getSurveyQuestions(surveyId) {
