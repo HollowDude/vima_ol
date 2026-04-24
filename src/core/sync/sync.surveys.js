@@ -166,14 +166,14 @@ export async function getSurveysForTask(taskId) {
   try {
     const relations = await StorageService.getItem(STORAGE_KEYS.SURVEY_RELS) || [];
     const surveys = await StorageService.getItem(STORAGE_KEYS.SURVEYS) || [];
-    const userInputs = await StorageService.getItem(STORAGE_KEYS.SURVEY_USER_INPUTS) || [];
+    let userInputs = await StorageService.getItem(STORAGE_KEYS.SURVEY_USER_INPUTS) || [];
     
     const taskRelations = relations.filter(r => {
       const rTaskId = Array.isArray(r.task_id) ? r.task_id[0] : r.task_id;
       return rTaskId === taskId;
     });
 
-    return taskRelations.map(rel => {
+    const enrichedSurveys = await Promise.all(taskRelations.map(async (rel) => {
       const surveyId = Array.isArray(rel.survey_id) ? rel.survey_id[0] : rel.survey_id;
       const surveyData = surveys.find(s => s.id === surveyId);
       
@@ -181,22 +181,66 @@ export async function getSurveysForTask(taskId) {
         return null;
       }
 
-      // Obtener user_input si existe
-      const userInputId = rel.survey_user_input_id 
+      // Obtener o crear user_input
+      let userInputId = rel.survey_user_input_id 
         ? (Array.isArray(rel.survey_user_input_id) ? rel.survey_user_input_id[0] : rel.survey_user_input_id)
         : null;
 
-      const userInput = userInputId 
+      let userInput = userInputId 
         ? userInputs.find(ui => ui.id === userInputId)
         : null;
+
+      // ✅ Si no existe user_input, crear uno vacío en Odoo
+      if (!userInput || !userInputId) {
+        try {
+          console.log(`📝 Creando user_input para encuesta ${surveyId} (relación ${rel.id})`);
+          
+          const newUserInputId = await OdooService.create('survey.user_input', {
+            survey_id: surveyId,
+            state: 'new',  // Estado inicial
+          });
+
+          // Obtener el user_input recién creado con su access_token
+          const createdInputs = await OdooService.read(
+            'survey.user_input',
+            [newUserInputId],
+            ['id', 'access_token', 'survey_id', 'state']
+          );
+
+          if (createdInputs && createdInputs[0]) {
+            userInput = createdInputs[0];
+            userInputId = newUserInputId;
+
+            // Actualizar la relación con el nuevo user_input_id
+            await OdooService.write('project.task.survey.rel', [rel.id], {
+              survey_user_input_id: newUserInputId
+            });
+
+            // Guardar en storage local
+            userInputs.push(userInput);
+            await StorageService.setItem(STORAGE_KEYS.SURVEY_USER_INPUTS, userInputs);
+
+            // Actualizar la relación local
+            rel.survey_user_input_id = newUserInputId;
+            await StorageService.setItem(STORAGE_KEYS.SURVEY_RELS, relations);
+
+            console.log(`✅ User input creado: ${newUserInputId} con token ${userInput.access_token}`);
+          }
+        } catch (err) {
+          console.error('❌ Error creando user_input:', err);
+          // Continuar sin user_input - la URL usará solo el survey token
+        }
+      }
 
       return {
         ...surveyData,
         relation_id: rel.id,
         survey_user_input_id: userInputId,
-        user_input: userInput,  // ✅ Incluir los datos del user_input
+        user_input: userInput,
       };
-    }).filter(Boolean);
+    }));
+
+    return enrichedSurveys.filter(Boolean);
   } catch (error) {
     console.error('❌ Error obteniendo encuestas de tarea:', error);
     return [];

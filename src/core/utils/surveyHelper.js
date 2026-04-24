@@ -3,12 +3,11 @@ import OdooService from '../api/odoo.service';
 /**
  * Construye la URL pública de una encuesta en Odoo
  * 
- * Patrones soportados:
- * 1. Encuesta sin responder: /survey/start/{survey_access_token}
- * 2. Encuesta con respuesta: /survey/{survey_access_token}/{user_input_access_token}
+ * IMPORTANTE: Para que funcione desde apps móviles sin cookies de sesión,
+ * SIEMPRE debe existir un user_input con su access_token.
  * 
  * @param {object} survey - Objeto survey con datos
- * @param {object} userInput - Objeto user_input si existe (opcional)
+ * @param {object} userInput - Objeto user_input (REQUERIDO)
  * @returns {string|null} - URL completa o null
  */
 export function buildSurveyPublicUrl(survey, userInput = null) {
@@ -25,16 +24,17 @@ export function buildSurveyPublicUrl(survey, userInput = null) {
     return null;
   }
 
-  // Caso 1: Si existe user_input con su token (encuesta ya respondida)
-  if (userInput && userInput.access_token) {
-    const url = `${baseUrl}/survey/${survey.access_token}/${userInput.access_token}`;
-    console.log('✅ URL de encuesta respondida:', url);
-    return url;
+  // ✅ CRÍTICO: Siempre requerir user_input.access_token para apps móviles
+  if (!userInput || !userInput.access_token) {
+    console.warn('⚠️ No hay user_input.access_token disponible para la encuesta:', survey.id);
+    console.warn('   La URL puede no funcionar correctamente desde la app móvil.');
+    // Fallback a URL de inicio (puede no funcionar en móvil)
+    return `${baseUrl}/survey/start/${survey.access_token}`;
   }
 
-  // Caso 2: Encuesta sin responder
-  const url = `${baseUrl}/survey/start/${survey.access_token}`;
-  console.log('✅ URL de encuesta nueva:', url);
+  // ✅ Formato correcto: /survey/{survey_token}/{answer_token}
+  const url = `${baseUrl}/survey/${survey.access_token}/${userInput.access_token}`;
+  console.log('✅ URL de encuesta construida:', url);
   return url;
 }
 
@@ -46,8 +46,13 @@ export function buildSurveyPublicUrl(survey, userInput = null) {
 export function getSurveyUrl(survey) {
   if (!survey) return null;
   
-  // El survey puede tener user_input adjunto
+  // El survey DEBE tener user_input adjunto
   const userInput = survey.user_input || null;
+  
+  if (!userInput) {
+    console.warn('⚠️ Survey sin user_input:', survey.id);
+    return null;
+  }
   
   return buildSurveyPublicUrl(survey, userInput);
 }
