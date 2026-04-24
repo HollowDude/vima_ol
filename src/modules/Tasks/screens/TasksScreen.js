@@ -21,6 +21,8 @@ import { usePrevious } from '../../../core/hooks/usePrevious';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const HOURS             = Array.from({ length: 24 }, (_, i) => i);
+const WORK_HOURS_START  = 7;  // 7 AM
+const WORK_HOURS_END    = 19; // 7 PM
 const BASE_HOUR_HEIGHT  = 80;
 const MIN_ZOOM          = 0.5;
 const MAX_ZOOM          = 2;
@@ -309,6 +311,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
   const [visibleMonth,     setVisibleMonth]     = useState('');
   const [projectDateStart, setProjectDateStart] = useState(null);
   const [projectDateEnd,   setProjectDateEnd]   = useState(null);
+  const [showAllHours,     setShowAllHours]     = useState(false);
 
   const prevOnline  = usePrevious(isOnline);
   const HOUR_HEIGHT = BASE_HOUR_HEIGHT * zoomLevel;
@@ -334,6 +337,14 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
     });
     return set;
   }, [extendedTasks]);
+
+  // ── Horarios a mostrar (filtrados o completos) ──────────────────────────────
+  const hoursToShow = useMemo(() => {
+    if (showAllHours) {
+      return HOURS;
+    }
+    return HOURS.filter(h => h >= WORK_HOURS_START && h <= WORK_HOURS_END);
+  }, [showAllHours]);
 
   // ── Client-filtered tasks (applied to both calendar and list) ─────────────────
   const clientFilteredTasks = useMemo(() => {
@@ -1101,6 +1112,21 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                         </Text>
                       </View>
                     )}
+                    {/* ── NUEVO: Botón para toggle de horarios completos ── */}
+                    <TouchableOpacity
+                      style={styles.hoursToggleBtn}
+                      onPress={() => setShowAllHours(prev => !prev)}
+                      activeOpacity={0.7}
+                    >
+                      <Feather 
+                        name={showAllHours ? "eye-off" : "eye"} 
+                        size={12} 
+                        color="#6B7280" 
+                      />
+                      <Text style={styles.hoursToggleBtnText}>
+                        {showAllHours ? '7am-7pm' : '24h'}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                 )}
 
@@ -1128,7 +1154,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                           <Feather name="skip-back" size={18} color="#fff" />
                         )}
                       </TouchableOpacity>
-                      {HOURS.map(hour => (
+                      {hoursToShow.map(hour => (
                         <View key={hour} style={[styles.hourCell, { height: HOUR_HEIGHT }]}>
                           <Text style={styles.hourText}>
                             {hour.toString().padStart(2, '0')}:00
@@ -1187,7 +1213,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
                             </View>
                           </TouchableOpacity>
 
-                          {HOURS.map(hour => {
+                          {hoursToShow.map(hour => {
                             const slotTasks = getTasksForDayAndHour(day.dateString, hour);
                             return (
                               <TouchableOpacity
@@ -1413,6 +1439,25 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     color: '#fff',
+  },
+
+  // ── NUEVO: Botón toggle de horarios completos ─────────────────────────────────
+  hoursToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginLeft: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  hoursToggleBtnText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#6B7280',
   },
 
   // ── Calendar ──────────────────────────────────────────────────────────────────

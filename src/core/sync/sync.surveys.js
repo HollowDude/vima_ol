@@ -231,6 +231,7 @@ export async function getSurveysForTask(taskId) {
           // Continuar sin user_input - la URL usará solo el survey token
         }
       }
+      
 
       return {
         ...surveyData,

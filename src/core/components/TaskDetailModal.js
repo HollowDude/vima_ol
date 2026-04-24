@@ -173,9 +173,11 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
         const surveyUrl = getSurveyUrl(s);
 
         console.log(`📋 Survey "${s.title}" (ID: ${s.id})`, {
-          has_access_token: !!s.access_token,
+          has_survey_token: !!s.access_token,
+          survey_token: s.access_token ? '***' : 'N/A',
           has_user_input: !!s.user_input,
-          user_input_token: s.user_input?.access_token ? '***' : 'N/A',
+          has_answer_token: !!s.user_input?.access_token,
+          answer_token: s.user_input?.access_token ? '***' : 'N/A',
           url: surveyUrl,
           isCompleted
         });
@@ -198,6 +200,8 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
     return;
   }
 
+  console.log('🔗 Abriendo URL:', surveyUrl);
+
   try {
     const canOpen = await Linking.canOpenURL(surveyUrl);
     if (canOpen) {
@@ -206,7 +210,7 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
       Alert.alert('Error', 'No se puede abrir la URL en el navegador');
     }
   } catch (error) {
-    console.error('Error abriendo URL:', error);
+    console.error('❌❌❌ Error abriendo URL:', error);
     Alert.alert('Error', 'No se pudo abrir la encuesta: ' + error.message);
   }
 };
