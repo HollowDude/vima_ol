@@ -139,8 +139,11 @@ class SyncService {
   async updateClientLocally(clientId, updates, opts) { return Clients.updateClientLocally(clientId, updates, opts); }
 
   // Leads
+  // Leads
   async syncLeads() { return Leads.syncLeads(); }
   async getLocalLeads() { return Leads.getLocalLeads(); }
+  /** Sólo los leads del usuario autenticado (para restricción de edición). */
+  async getOwnLeads() { return Leads.getOwnLeads(); }
   async createLeadLocally(leadData) { return Leads.createLeadLocally(leadData); }
   async updateLeadLocally(leadId, updates, opts) { return Leads.updateLeadLocally(leadId, updates, opts); }
   async deleteLeadLocally(leadId) { return Leads.deleteLeadLocally(leadId); }

@@ -2,10 +2,20 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { formatCurrency } from '../utils/currencyhelper';
+import { useState, useEffect } from 'react';
+import OdooService from '../api/odoo.service';
 
 export default function LeadCard({ lead, stages = [], onPress, onMoveToNextStage, style }) {
   const revenue = lead.expected_revenue || 0;
   const formattedRevenue = formatCurrency(revenue, lead.company_currency);
+  const [canEdit, setCanEdit] = useState(false);
+  useEffect(() => {
+    if (lead) {
+      const leadUserId = Array.isArray(lead.user_id) ? lead.user_id[0] : lead.user_id;
+      const currentUserId = OdooService.uid;
+      setCanEdit(leadUserId === currentUserId);
+    }
+  }, [lead]);
 
   const deadline = lead.date_deadline 
     ? new Date(lead.date_deadline).toLocaleDateString('es-ES', { 
@@ -44,6 +54,12 @@ export default function LeadCard({ lead, stages = [], onPress, onMoveToNextStage
         activeOpacity={0.7}
       >
         <View style={styles.header}>
+          {!canEdit && (
+            <View style={styles.readOnlyBanner}>
+              <Feather name="lock" size={14} color="#9CA3AF" />
+              <Text style={styles.readOnlyText}>Vista de solo lectura</Text>
+            </View>
+          )}
           <View style={styles.titleRow}>
             <Text style={styles.title} numberOfLines={1}>
               {lead.name || 'Sin nombre'}
@@ -81,7 +97,7 @@ export default function LeadCard({ lead, stages = [], onPress, onMoveToNextStage
         </View>
 
         {/*Botón de siguiente etapa */}
-        {nextStage && onMoveToNextStage && (
+        {nextStage && onMoveToNextStage && canEdit && (
           <TouchableOpacity
             style={styles.nextStageButtonIntegrated}
             onPress={(e) => {
@@ -217,5 +233,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#64c27b',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  readOnlyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#F3F4F6',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  readOnlyText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B7280',
   },
 });

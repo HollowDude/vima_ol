@@ -11,6 +11,7 @@ import SimpleDatePicker from './SimpleDatePicker'; // <--- IMPORTADO
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import validators from '../utils/validators';
 import { formatCurrency } from '../utils/currencyhelper';
+import OdooService from '../api/odoo.service';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const MODAL_HEIGHT = SCREEN_HEIGHT * 0.9;
@@ -94,6 +95,7 @@ export default function LeadDetailModal({ visible, lead, onClose, onLeadUpdated,
   const [masterCountries, setMasterCountries] = useState([]);
   const [masterStates, setMasterStates] = useState([]);
   const [masterTypes, setMasterTypes] = useState([]);
+  const [canEdit, setCanEdit] = useState(false);
 
   useEffect(() => {
     if (visible && lead) {
@@ -106,6 +108,14 @@ export default function LeadDetailModal({ visible, lead, onClose, onLeadUpdated,
       Animated.timing(slideAnim, { toValue: SCREEN_HEIGHT, duration: 250, useNativeDriver: true }).start();
     }
   }, [visible, lead]);
+
+  useEffect(() => {
+    if (lead) {
+      const leadUserId = Array.isArray(lead.user_id) ? lead.user_id[0] : lead.user_id;
+      const currentUserId = OdooService.uid;
+      setCanEdit(leadUserId === currentUserId);
+    }
+  }, [lead]);
 
   const loadMasters = async () => {
     try {
@@ -402,10 +412,12 @@ export default function LeadDetailModal({ visible, lead, onClose, onLeadUpdated,
                                 <Text style={styles.delButtonText}>Eliminar</Text>
                             </TouchableOpacity>**/}
                             
-                            <TouchableOpacity onPress={() => setEditing(true)} style={styles.editButton}>
+                            {!editing && canEdit && (
+                              <TouchableOpacity onPress={() => setEditing(true)} style={styles.editButton}>
                                 <Feather name="edit-2" size={16} color="#64c27b" />
                                 <Text style={styles.editButtonText}>Editar</Text>
-                            </TouchableOpacity>
+                              </TouchableOpacity>
+                            )}
                         </View>
                     )}
                 </View>
@@ -556,10 +568,18 @@ export default function LeadDetailModal({ visible, lead, onClose, onLeadUpdated,
                     </>
                     ) : (
                     <View>
-                        <TouchableOpacity style={styles.addTaskBtn} onPress={() => setCreateTaskVisible(true)}>
-                            <Feather name="plus" size={18} color="#fff" />
-                            <Text style={{color: '#fff', fontWeight: 'bold'}}>Nueva Tarea</Text>
-                        </TouchableOpacity>
+                        {!canEdit && (
+                          <View style={styles.readOnlyBanner}>
+                            <Feather name="lock" size={14} color="#9CA3AF" />
+                            <Text style={styles.readOnlyText}>Vista de solo lectura</Text>
+                          </View>
+                        )}
+                        {canEdit && (
+                          <TouchableOpacity style={styles.addTaskBtn} onPress={() => setCreateTaskVisible(true)}>
+                              <Feather name="plus" size={18} color="#fff" />
+                              <Text style={{color: '#fff', fontWeight: 'bold'}}>Nueva Tarea</Text>
+                          </TouchableOpacity>
+                        )}
                         {leadTasks.map(t => (
                             <TouchableOpacity 
                               key={t.id} 
@@ -670,5 +690,20 @@ const styles = StyleSheet.create({
   addTaskBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#64c27b', padding: 12, borderRadius: 8, marginBottom: 16, gap: 8 },
   taskCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderWidth: 1, borderColor: '#F3F4F6', borderRadius: 12, marginBottom: 12, backgroundColor: '#fff' },
   taskTitle: { fontWeight: '600', fontSize: 15, color: '#1F2937', marginBottom: 4 },
-  taskSub: { color: '#9CA3AF', fontSize: 13 }
+  taskSub: { color: '#9CA3AF', fontSize: 13 },
+  readOnlyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#F3F4F6',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  readOnlyText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
 });

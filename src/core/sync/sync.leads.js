@@ -6,21 +6,16 @@ import * as Pending from './sync.pending';
 export async function syncLeads() {
   try {
     console.log('🔄 Sincronizando oportunidades (CRM Leads)...');
-    const currentUserId = OdooService.uid;
-    
-    if (!currentUserId) {
-      throw new Error('Usuario no autenticado');
-    }
 
     try {
       await Pending.syncPendingChangesNonSurvey();
     } catch (pendingError) {
     }
 
+    // ✅ Se descargan TODOS los leads activos (sin filtro por user_id)
     const leads = await OdooService.searchRead(
       'crm.lead',
       [
-        ['user_id', '=', currentUserId],
         ['active', '=', true]
       ],
       [
@@ -40,18 +35,41 @@ export async function syncLeads() {
     );
 
     await StorageService.setItem(STORAGE_KEYS.LEADS, leads);
+    console.log('✅ Leads sincronizados:', leads.length);
     
     return leads;
   } catch (error) {
+    console.error('❌ Error sincronizando leads:', error);
     throw error;
   }
 }
 
+/** Devuelve todos los leads almacenados localmente (propios + ajenos). */
 export async function getLocalLeads() {
   try {
     const leads = await StorageService.getItem(STORAGE_KEYS.LEADS);
     return leads || [];
   } catch (error) {
+    console.error('❌ Error leyendo leads locales:', error);
+    return [];
+  }
+}
+
+/**
+ * Devuelve únicamente los leads cuyo user_id coincide con el usuario
+ * autenticado actualmente. Se usa para restricción de edición.
+ */
+export async function getOwnLeads() {
+  try {
+    const leads = await getLocalLeads();
+    const currentUserId = OdooService.uid;
+    if (!currentUserId) return leads;
+    return leads.filter(l => {
+      const leadUserId = Array.isArray(l.user_id) ? l.user_id[0] : l.user_id;
+      return leadUserId === currentUserId;
+    });
+  } catch (error) {
+    console.error('❌ Error leyendo leads propios:', error);
     return [];
   }
 }
@@ -97,6 +115,11 @@ export async function createLeadLocally(leadData = {}) {
   }
 }
 
+/**
+ * Actualiza un lead localmente y añade pending.
+ * Solo se llama desde la UI para leads propios (la restricción se aplica
+ * en LeadDetailModal antes de llegar aquí).
+ */
 export async function updateLeadLocally(leadId, updates = {}, opts = {}) {
   try {
     const leads = (await StorageService.getItem(STORAGE_KEYS.LEADS)) || [];
@@ -230,6 +253,7 @@ export async function getLeadsStatsByStage() {
 export default {
   syncLeads,
   getLocalLeads,
+  getOwnLeads,
   createLeadLocally,
   updateLeadLocally,
   deleteLeadLocally,

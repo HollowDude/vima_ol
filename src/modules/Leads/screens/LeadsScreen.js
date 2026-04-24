@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  RefreshControl, Alert,
+  RefreshControl, Alert, TextInput,
 } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
@@ -18,18 +18,22 @@ import useSyncActions from '../../../core/hooks/useSyncActions';
 import SyncService from '../../../core/sync/sync.service';
 import { usePrevious } from '../../../core/hooks/usePrevious';
 import { formatCurrency, getCurrencyCode } from '../../../core/utils/currencyhelper';
+import OdooService from '../../../core/api/odoo.service';
 
 export default function LeadsScreen({ userData, username, onBack, onLogout }) {
   const { isOnline }            = useNetwork();
   const { syncAll, syncModule } = useSyncActions();
 
   const [leads, setLeads]                       = useState([]);
+  const [filteredLeads, setFilteredLeads]       = useState([]);
   const [stages, setStages]                     = useState([]);
   const [selectedStage, setSelectedStage]       = useState(null);
   const [selectedLead, setSelectedLead]         = useState(null);
   const [isCreateModalVisible, setCreateModal]  = useState(false);
   const [menuVisible, setMenuVisible]           = useState(false);
   const [refreshing, setRefreshing]             = useState(false);
+  const [searchQuery, setSearchQuery]           = useState('');
+  const [showOnlyOwn, setShowOnlyOwn]           = useState(true);
 
   const prevOnline = usePrevious(isOnline);
 
@@ -40,6 +44,8 @@ export default function LeadsScreen({ userData, username, onBack, onLogout }) {
       syncAll().then(() => loadData());
     }
   }, [isOnline, prevOnline]);
+
+  useEffect(() => { filterLeads(); }, [searchQuery, leads, showOnlyOwn, selectedStage]);
 
   const loadData = async () => {
     try {
@@ -58,7 +64,56 @@ export default function LeadsScreen({ userData, username, onBack, onLogout }) {
     finally { setRefreshing(false); }
   };
 
+  const filterLeads = () => {
+    const currentUserId = OdooService.uid;
+
+    let base = leads;
+
+    // Filtro propio / todos
+    if (showOnlyOwn) {
+      base = base.filter(l => {
+        const leadUserId = Array.isArray(l.user_id) ? l.user_id[0] : l.user_id;
+        return leadUserId === currentUserId;
+      });
+    }
+
+    // Filtro por etapa
+    if (selectedStage) {
+      base = base.filter(l => {
+        const stageId = Array.isArray(l.stage_id) ? l.stage_id[0] : l.stage_id;
+        return stageId === selectedStage;
+      });
+    }
+
+    // Filtro de búsqueda
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      base = base.filter(l =>
+        (l.name         || '').toLowerCase().includes(q) ||
+        (l.partner_name || '').toLowerCase().includes(q) ||
+        (l.contact_name || '').toLowerCase().includes(q) ||
+        (l.email_from   || '').toLowerCase().includes(q) ||
+        (l.phone        || '').includes(q) ||
+        (l.mobile       || '').includes(q)
+      );
+    }
+
+    setFilteredLeads(base);
+  };
+
   const handleMoveToNextStage = async (lead) => {
+    // Validar que el lead pertenece al usuario actual
+    const leadUserId = Array.isArray(lead.user_id) ? lead.user_id[0] : lead.user_id;
+    const currentUserId = OdooService.uid;
+    
+    if (leadUserId !== currentUserId) {
+      Alert.alert(
+        'No permitido',
+        'Solo puedes modificar tus propias oportunidades'
+      );
+      return;
+    }
+
     const currentId    = Array.isArray(lead.stage_id) ? lead.stage_id[0] : lead.stage_id;
     const currentIndex = stages.findIndex(s => s.id === currentId);
     if (currentIndex < 0 || currentIndex >= stages.length - 1) return;
@@ -75,19 +130,32 @@ export default function LeadsScreen({ userData, username, onBack, onLogout }) {
   const handleLeadUpdated = async ()  => loadData();
   const handleLeadDeleted = async ()  => { setSelectedLead(null); await loadData(); };
 
-  const getLeadsCountByStage = (id) =>
-    leads.filter(l => (Array.isArray(l.stage_id) ? l.stage_id[0] : l.stage_id) === id).length;
+  const getLeadsCountByStage = (id) => {
+    const currentUserId = OdooService.uid;
+    const baseLeads = showOnlyOwn
+      ? leads.filter(l => {
+          const leadUserId = Array.isArray(l.user_id) ? l.user_id[0] : l.user_id;
+          return leadUserId === currentUserId;
+        })
+      : leads;
+    
+    return baseLeads.filter(l => (Array.isArray(l.stage_id) ? l.stage_id[0] : l.stage_id) === id).length;
+  };
 
   const getStageColor = (i) => {
     const p = (i + 1) / stages.length;
     return p < 0.33 ? '#EF4444' : p < 0.66 ? '#F59E0B' : '#10B981';
   };
 
-  const filteredLeads = selectedStage
-    ? leads.filter(l => (Array.isArray(l.stage_id) ? l.stage_id[0] : l.stage_id) === selectedStage)
+  const currentUserId = OdooService.uid;
+  const baseLeadsForRevenue = showOnlyOwn
+    ? leads.filter(l => {
+        const uid = Array.isArray(l.user_id) ? l.user_id[0] : l.user_id;
+        return uid === currentUserId;
+      })
     : leads;
 
-  const revenueByСurrency = leads.reduce((acc, lead) => {
+  const revenueByСurrency = baseLeadsForRevenue.reduce((acc, lead) => {
     const cur = getCurrencyCode(lead.company_currency);
     acc[cur] = (acc[cur] || 0) + (lead.expected_revenue || 0);
     return acc;
@@ -101,7 +169,11 @@ export default function LeadsScreen({ userData, username, onBack, onLogout }) {
       .slice(0, 2).map(c => formatCurrency(revenueByСurrency[c], c)).join(' + ');
   };
 
-  // FAB: principal expande, menu abre sidebar, plus crea lead, arrow-left vuelve
+  const ownCount = leads.filter(l => {
+    const uid = Array.isArray(l.user_id) ? l.user_id[0] : l.user_id;
+    return uid === currentUserId;
+  }).length;
+
   const fabActions = [
     { icon: 'more-vertical', onPress: () => {}                        },
     { icon: 'menu',          onPress: () => setMenuVisible(true)      },
@@ -135,6 +207,33 @@ export default function LeadsScreen({ userData, username, onBack, onLogout }) {
           <Card style={styles.mainCard}>
             <DashboardHeader userName={username || 'Usuario'} isOnline={isOnline} />
 
+            {/* Toggle Mis oportunidades / Todas */}
+            <View style={styles.toggleSection}>
+              <View style={styles.toggleRow}>
+                <TouchableOpacity
+                  style={[styles.toggleBtn, showOnlyOwn && styles.toggleBtnActive]}
+                  onPress={() => setShowOnlyOwn(true)}
+                  activeOpacity={0.8}
+                >
+                  <Feather name="user-check" size={13} color={showOnlyOwn ? '#fff' : '#9CA3AF'} />
+                  <Text style={[styles.toggleBtnTxt, showOnlyOwn && styles.toggleBtnTxtActive]}>
+                    Mis oportunidades ({ownCount})
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.toggleBtn, !showOnlyOwn && styles.toggleBtnActive]}
+                  onPress={() => setShowOnlyOwn(false)}
+                  activeOpacity={0.8}
+                >
+                  <Feather name="briefcase" size={13} color={!showOnlyOwn ? '#fff' : '#9CA3AF'} />
+                  <Text style={[styles.toggleBtnTxt, !showOnlyOwn && styles.toggleBtnTxtActive]}>
+                    Todas ({leads.length})
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
             {/* Pipeline */}
             <View style={styles.dashboard}>
               <Text style={styles.dashboardTitle}>Flujo de Oportunidades</Text>
@@ -164,11 +263,32 @@ export default function LeadsScreen({ userData, username, onBack, onLogout }) {
               <View style={styles.dashboardSummary}>
                 <View style={styles.summaryItem}>
                   <Feather name="briefcase" size={16} color="#64c27b" />
-                  <Text style={styles.summaryText}>{leads.length} oportunidad{leads.length !== 1 ? 'es' : ''}</Text>
+                  <Text style={styles.summaryText}>
+                    {baseLeadsForRevenue.length} oportunidad{baseLeadsForRevenue.length !== 1 ? 'es' : ''}
+                  </Text>
                 </View>
                 <View style={styles.summaryItem}>
                   <Text style={styles.summaryText}>{formatTotalRevenue()}</Text>
                 </View>
+              </View>
+            </View>
+
+            {/* Buscador */}
+            <View style={styles.searchSection}>
+              <View style={styles.searchContainer}>
+                <Feather name="search" size={18} color="#9CA3AF" style={styles.searchIcon} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Buscar oportunidad..."
+                  placeholderTextColor="#9CA3AF"
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                />
+                {searchQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setSearchQuery('')}>
+                    <Feather name="x" size={18} color="#9CA3AF" />
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
 
@@ -178,10 +298,15 @@ export default function LeadsScreen({ userData, username, onBack, onLogout }) {
                 <Text style={styles.leadsSectionTitle}>
                   {selectedStage
                     ? `${stages.find(s => s.id === selectedStage)?.name || ''} (${filteredLeads.length})`
-                    : `Todas (${leads.length})`}
+                    : searchQuery
+                      ? `Resultados (${filteredLeads.length})`
+                      : `${showOnlyOwn ? 'Mis oportunidades' : 'Todas'} (${filteredLeads.length})`}
                 </Text>
-                {selectedStage && (
-                  <TouchableOpacity onPress={() => setSelectedStage(null)} style={styles.clearFilterButton}>
+                {(selectedStage || searchQuery) && (
+                  <TouchableOpacity 
+                    onPress={() => { setSelectedStage(null); setSearchQuery(''); }} 
+                    style={styles.clearFilterButton}
+                  >
                     <Feather name="x" size={16} color="#6B7280" />
                     <Text style={styles.clearFilterText}>Limpiar</Text>
                   </TouchableOpacity>
@@ -192,7 +317,11 @@ export default function LeadsScreen({ userData, username, onBack, onLogout }) {
                 <View style={styles.emptyState}>
                   <Feather name="briefcase" size={48} color="#D1D5DB" />
                   <Text style={styles.emptyText}>
-                    {selectedStage ? 'No hay oportunidades en esta etapa' : 'No hay oportunidades'}
+                    {searchQuery
+                      ? 'No se encontraron oportunidades'
+                      : selectedStage
+                        ? 'No hay oportunidades en esta etapa'
+                        : 'No hay oportunidades'}
                   </Text>
                 </View>
               ) : (
@@ -230,7 +359,46 @@ const styles = StyleSheet.create({
   scrollView:    { flex: 1 },
   scrollContent: { padding: 16, paddingTop: 80, paddingBottom: 180 },
   mainCard:      { marginBottom: 16 },
-  dashboard: { padding: 16, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
+  
+  toggleSection: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 8,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    backgroundColor: '#f3f4f6',
+    borderRadius: 8,
+    padding: 3,
+  },
+  toggleBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    gap: 6,
+  },
+  toggleBtnActive: {
+    backgroundColor: '#64c27b',
+    shadowColor: '#64c27b',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  toggleBtnTxt: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#9CA3AF',
+  },
+  toggleBtnTxtActive: {
+    color: '#fff',
+  },
+
+  dashboard: { padding: 16, paddingTop: 8, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
   dashboardTitle:  { fontSize: 18, fontWeight: '700', color: '#111827', marginBottom: 16 },
   dashboardScroll: { paddingRight: 20 },
   stageCard: {
@@ -252,7 +420,20 @@ const styles = StyleSheet.create({
   },
   summaryItem:  { flexDirection: 'row', alignItems: 'center', gap: 8 },
   summaryText:  { fontSize: 14, fontWeight: '600', color: '#374151' },
-  leadsSection: { padding: 16 },
+
+  searchSection: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  searchContainer: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#f3f4f6', borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 10,
+  },
+  searchIcon:   { marginRight: 8 },
+  searchInput:  { flex: 1, fontSize: 15, color: '#0B1B2A' },
+
+  leadsSection: { padding: 16, paddingTop: 0 },
   leadsSectionHeader: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16,
   },
