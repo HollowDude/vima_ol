@@ -166,7 +166,7 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
       
       const enrichedSurveys = await Promise.all(surveys.map(async (s) => {
         const localProgress = await SyncService.getSurveyProgress(task.id, s.id, s.relation_id);
-        let isCompleted = !!s.survey_user_input_id;
+        let isCompleted = s.user_input?.state === 'done';
         if (localProgress?.state === 'done') isCompleted = true;
         
         // ✅ Construir URL usando el helper
@@ -622,21 +622,16 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
                       </TouchableOpacity>
 
                       {/* ✅ Botón para abrir en web */}
-                      {survey.surveyUrl && (
+                      {survey.surveyUrl && survey.isCompleted && isOnline && !isHistorical && (
                         <TouchableOpacity
-                          style={[
-                            styles.surveyWebButton,
-                            !isOnline && styles.surveyWebButtonDisabled,
-                            isHistorical && styles.surveyWebButtonDisabled,
-                          ]}
+                          style={styles.surveyWebButton}
                           onPress={() => handleOpenSurveyInWeb(survey.surveyUrl)}
-                          disabled={!isOnline || isHistorical}
-                          activeOpacity={isOnline && !isHistorical ? 0.7 : 1}
+                          activeOpacity={0.7}
                         >
                           <Feather 
                             name="external-link" 
                             size={14} 
-                            color={isOnline && !isHistorical ? "#64c27b" : "#D1D5DB"} 
+                            color="#64c27b"
                           />
                         </TouchableOpacity>
                       )}
@@ -996,7 +991,7 @@ const styles = StyleSheet.create({
   surveyStatusText:   { fontSize: 10, fontWeight: '500', color: '#6B7280', marginTop: 4 },
   editBadge: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff',
-    paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4,
+    paddingHorizontal: 4, paddingVertical: 0, borderRadius: 4,
   },
   editBadgeText: { fontSize: 9, color: '#15803d', marginLeft: 2, fontWeight: 'bold' },
 
@@ -1083,7 +1078,7 @@ const styles = StyleSheet.create({
   },
   surveyWebButton: {
     position: 'absolute',
-    top: 8,
+    top: 28,
     right: 8,
     width: 32,
     height: 32,

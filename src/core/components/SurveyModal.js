@@ -13,7 +13,8 @@ import { getSurveyUrl } from '../utils/surveyHelper';
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 function QuestionCard({ 
-  question, 
+  question,
+  survey,
   answer, 
   onAnswerChange, 
   currentIndex, 
@@ -563,17 +564,16 @@ function QuestionCard({
             </View>
           </View>
           <View style={styles.headerRightActions}>
-            {surveyUrl && (
+            {surveyUrl && isOnline && survey?.user_input?.state === 'done' && (
               <TouchableOpacity 
                 onPress={onOpenWeb}
-                disabled={!isOnline}
-                style={[styles.webButton, !isOnline && styles.webButtonDisabled]}
-                activeOpacity={isOnline ? 0.7 : 1}
+                style={styles.webButton}
+                activeOpacity={0.7}
               >
                 <Feather 
                   name="external-link" 
                   size={16} 
-                  color={isOnline ? "#64c27b" : "#D1D5DB"} 
+                  color="#64c27b"
                 />
               </TouchableOpacity>
             )}
