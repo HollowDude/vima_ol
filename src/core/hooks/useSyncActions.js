@@ -12,13 +12,6 @@ function sleep(ms) {
   return new Promise(res => setTimeout(res, ms));
 }
 
-/**
- * Hook que orquesta la sincronización completa con:
- * - Feedback granular por fase
- * - Toasts de éxito/error por módulo
- * - Resumen final
- * - Reintentos automáticos en módulos que fallan
- */
 export default function useSyncActions() {
   const { isOnline } = useNetwork();
   const {
@@ -28,7 +21,6 @@ export default function useSyncActions() {
 
   const isSyncingRef = useRef(false);
 
-  // ── Intentar una operación con reintentos ──────────────────────────────────
   const withRetry = useCallback(async (fn, label) => {
     let lastError;
     for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
@@ -36,6 +28,7 @@ export default function useSyncActions() {
         return await fn();
       } catch (err) {
         lastError = err;
+        console.error(`⚠️ ${label} - Intento ${attempt}/${MAX_RETRIES + 1} falló:`, err.message);
         if (attempt <= MAX_RETRIES) {
           await sleep(RETRY_DELAY_MS * attempt);
         }
@@ -44,7 +37,6 @@ export default function useSyncActions() {
     throw lastError;
   }, []);
 
-  // ── Sync completo ──────────────────────────────────────────────────────────
   const syncAll = useCallback(async (opts = {}) => {
     if (!isOnline) {
       showToast('Sin conexión. Los cambios se guardarán para luego.', 'warning');
@@ -66,23 +58,11 @@ export default function useSyncActions() {
       attachments: { success: false },
     };
 
-    let projectToKeepId = null;
-
     try {
       // ── 1. Maestros ────────────────────────────────────────────────────────
       updatePhase('MASTER');
       try {
-        const { projectChanged, oldProject } = await withRetry(
-          () => SyncService.syncMasterData(), 'Datos base'
-        );
-
-        // lógica del día 25 (idéntica a sync.service original)
-        const now = new Date();
-        const isLateMonth = now.getDate() > 25;
-        if (isLateMonth && projectChanged && oldProject) {
-          projectToKeepId = oldProject.id;
-        }
-
+        await withRetry(() => SyncService.syncMasterData(), 'Datos base');
         results.master.success = true;
       } catch (e) {
         results.master.error = e.message;
@@ -121,7 +101,7 @@ export default function useSyncActions() {
       updatePhase('CLIENTS');
       const [clientsRes, tasksRes, leadsRes] = await Promise.allSettled([
         withRetry(() => SyncService.syncClients(), 'Clientes'),
-        withRetry(() => SyncService.syncTasks(projectToKeepId), 'Tareas'),
+        withRetry(() => SyncService.syncTasks(), 'Tareas'),
         withRetry(() => SyncService.syncLeads(), 'Oportunidades'),
       ]);
 
@@ -136,6 +116,10 @@ export default function useSyncActions() {
       if (tasksRes.status === 'fulfilled') {
         results.tasks.success = true;
         results.tasks.count   = tasksRes.value?.subtasks?.length || 0;
+        // ✅ SOLO si se sincronizó bien, purgar caché extendida
+        if (tasksRes.value?.subtasks?.length) {
+          await SyncService.purgeExtendedTasksWithIds(tasksRes.value.subtasks.map(t => t.id));
+        }
       } else {
         results.tasks.error = tasksRes.reason?.message;
         showToast('Error sincronizando tareas', 'error', 4000);
@@ -179,7 +163,6 @@ export default function useSyncActions() {
 
       // ── Resumen ────────────────────────────────────────────────────────────
       updatePhase('DONE');
-      // 👇 Añade esta línea
       await StorageService.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
 
       const successCount = Object.values(results).filter(r => r.success).length;
@@ -212,14 +195,12 @@ export default function useSyncActions() {
     }
   }, [isOnline, startSync, finishSync, updatePhase, showToast, refreshPendingCount, withRetry]);
 
-  // ── Sync rápido solo de un módulo (para pulls desde pantallas) ─────────────
   const syncModule = useCallback(async (moduleName) => {
     if (!isOnline) {
       showToast('Sin conexión', 'warning');
       return null;
     }
 
-    // Primero siempre subir pendientes
     try {
       await SyncService.syncPendingChanges();
       await refreshPendingCount();
@@ -251,8 +232,6 @@ export default function useSyncActions() {
     }
   }, [isOnline, showToast, refreshPendingCount]);
 
-  // Notificar al contexto que se guardó un cambio local
-  // Llamar desde cualquier modal tras updateClientLocally/updateLeadLocally/etc.
   const notifyLocalWrite = useCallback(() => {
     refreshPendingCount();
   }, [refreshPendingCount]);

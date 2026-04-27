@@ -139,6 +139,24 @@ export async function getAllVisibleTasks() {
     return { tasks: [], projectId: null, projectFinishDate: null };
   }
 }
+export async function purgeExtendedTasksWithIds(ids) {
+  try {
+    if (!ids || ids.length === 0) return;
+    
+    const { stored } = await _readCache();
+    const idsSet = new Set(ids);
+    
+    stored.batches = stored.batches.map(b => ({
+      ...b,
+      tasks: b.tasks.filter(t => !idsSet.has(t.id))
+    })).filter(b => b.tasks.length > 0);
+    
+    await StorageService.setItem(STORAGE_KEYS.EXTENDED_TASKS, stored);
+    console.log(`[ExtTasks] ${ids.length} tareas purgadas de caché extendida`);
+  } catch (error) {
+    console.error('[ExtTasks] Error purgando tareas:', error);
+  }
+}
 
 export async function replaceLocalTaskId(tempId, realId) {
   try {

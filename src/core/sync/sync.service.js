@@ -54,7 +54,7 @@ class SyncService {
 
       const [clientsResult, tasksResult, leadsResult] = await Promise.all([
         this.syncClients(),
-        this.syncTasks(projectToKeepId),
+        this.syncTasks(),
         this.syncLeads() 
       ]);
 
