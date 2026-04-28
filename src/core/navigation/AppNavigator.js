@@ -21,20 +21,31 @@ export default function AppNavigator() {
     checkAuth();
   }, []);
 
-  useEffect(() => {
-    if (!userData) return;
-    const handleUser = async () => {
-      try {
-        const user = await SyncService.getCurrentUser();
-        if (user?.[0]?.partner_id?.[1]) {
-          setUsername(user[0].partner_id[1]);
-        }
-      } catch (e) {
-        console.error('[AppNavigator] Error obteniendo usuario:', e);
+  /**
+   * Obtiene el nombre del usuario autenticado directamente de Odoo
+   * Usa el campo 'name' del modelo res.users (NO partner_id)
+   */
+  const loadCurrentUsername = async () => {
+    try {
+      // Obtener el usuario actual desde Odoo usando el uid almacenado
+      const currentUser = await OdooService.searchRead(
+        'res.users',
+        [['id', '=', OdooService.uid]],
+        ['name', 'login', 'partner_id'], // Traer el campo 'name' del usuario
+      );
+
+      if (currentUser && currentUser.length > 0) {
+        const userFullName = currentUser[0].name || currentUser[0].login || 'Usuario';
+        console.log('[AppNavigator] Usuario cargado:', userFullName);
+        setUsername(userFullName);
+        return userFullName;
       }
-    };
-    handleUser();
-  }, [userData]);
+    } catch (e) {
+      console.error('[AppNavigator] Error obteniendo nombre del usuario:', e);
+    }
+    
+    return null;
+  };
 
   const checkAuth = async () => {
     try {
@@ -44,6 +55,9 @@ export default function AppNavigator() {
         OdooService.password = authData.password;
         setUserData(authData);
         setIsAuthenticated(true);
+        
+        // 🔥 IMPORTANTE: Cargar el nombre DESPUÉS de establecer la autenticación
+        await loadCurrentUsername();
       }
     } catch (error) {
       console.error('[AppNavigator] Check auth error:', error);
@@ -52,9 +66,14 @@ export default function AppNavigator() {
     }
   };
 
-  const handleLoginSuccess = (authData) => {
+  const handleLoginSuccess = async (authData) => {
+    // Establecer datos de autenticación
     setUserData(authData);
     setIsAuthenticated(true);
+    
+    // 🔥 CRÍTICO: Cargar el nombre INMEDIATAMENTE después del login
+    // Esto asegura que se obtenga del usuario recién autenticado
+    await loadCurrentUsername();
   };
 
   /**
@@ -65,33 +84,32 @@ export default function AppNavigator() {
     try {
       console.log('[AppNavigator] Iniciando logout...');
       
-      // 1. Limpiar almacenamiento
+      // 1. 🔥 PRIMERO: Limpiar username (antes de borrar auth data)
+      setUsername('');
+      
+      // 2. Limpiar almacenamiento
       await StorageService.clearAuthData();
       
-      // 2. Limpiar datos de sincronización
+      // 3. Limpiar datos de sincronización
       await SyncService.clearLocalData();
       
-      // 3. Limpiar sesión de Odoo
+      // 4. Limpiar sesión de Odoo
       OdooService.clearSession();
       
-      // 4. Reset de estado
+      // 5. Reset de estado
       setUserData(null);
       setIsAuthenticated(false);
       setCurrentScreen('home');
-      setUsername('');
       
       console.log('[AppNavigator] Logout completado');
-      
-      // Si fue por autorización inválida, el toast ya fue mostrado por el error handler
-      // Si fue logout manual, el usuario verá la pantalla de login
       
     } catch (error) {
       console.error('[AppNavigator] Error en logout:', error);
       // Aún así hacer reset de estado aunque haya error
+      setUsername('');
       setUserData(null);
       setIsAuthenticated(false);
       setCurrentScreen('home');
-      setUsername('');
     }
   };
 

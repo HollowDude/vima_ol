@@ -33,9 +33,24 @@ const stripHtml = (html) => {
 
 const parseOdooDate = (dateStr) => {
   if (!dateStr) return null;
-  let formatted = dateStr.replace(' ', 'T');
-  if (!formatted.endsWith('Z')) formatted += 'Z';
-  return new Date(formatted);
+  
+  // Si la cadena ya tiene el formato ISO (incluye T), la pasamos directo
+  if (dateStr.includes('T')) return new Date(dateStr);
+
+  // Odoo suele enviar "YYYY-MM-DD HH:mm:ss" o "YYYY-MM-DD"
+  let formatted = dateStr;
+  
+  if (dateStr.includes(' ')) {
+    // Es un DateTime: reemplazamos espacio por T y aseguramos el UTC
+    formatted = dateStr.replace(' ', 'T');
+    if (!formatted.endsWith('Z')) formatted += 'Z';
+  }
+  // Si no tiene espacio, es un Date "YYYY-MM-DD" y JS lo parsea bien así
+  
+  const date = new Date(formatted);
+  
+  // Verificación de seguridad por si el string sigue siendo raro
+  return isNaN(date.getTime()) ? null : date;
 };
 
 const formatForOdoo = (dateObj) => {
@@ -446,6 +461,10 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
         hour: '2-digit', minute: '2-digit',
       })
     : 'Sin asignar';
+
+  const displayMaxDate = maxDate instanceof Date && !isNaN(maxDate)
+    ? maxDate.toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' })
+    : 'Fecha no disponible';
 
   const InfoRow = ({ icon, label, value, colorOverride }) => {
     if (!value || value === '-') return null;
