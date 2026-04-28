@@ -18,9 +18,12 @@ import { usePrevious } from '../../../core/hooks/usePrevious';
 export default function HomeScreen({
   userData, onLogout, username,
   onNavigateToTasks, onNavigateToClients, onNavigateToLeads,
+  onUnauthorized = () => {}, // Callback para logout por autorización inválida
 }) {
   const { isOnline } = useNetwork();
-  const { syncAll }  = useSyncActions();
+  
+  // Pasar onUnauthorized a useSyncActions
+  const { syncAll }  = useSyncActions(onUnauthorized);
   const { lastSync } = useSyncContext();
 
   const [menuVisible, setMenuVisible]   = useState(false);
@@ -40,7 +43,7 @@ export default function HomeScreen({
     if (prevOnline === false && isOnline === true) {
       syncAll().then(() => loadLocalData());
     }
-  }, [isOnline, prevOnline, isReady]);
+  }, [isOnline, prevOnline, isReady, syncAll]);
 
   const loadLocalData = async () => {
     try {
@@ -63,9 +66,18 @@ export default function HomeScreen({
   };
 
   const handleRefresh = async () => {
-    if (!isOnline) { Alert.alert('Sin conexión', 'Necesitas internet para sincronizar'); return; }
-    try { setRefreshing(true); await syncAll(); await loadLocalData(); }
-    finally { setRefreshing(false); }
+    if (!isOnline) { 
+      Alert.alert('Sin conexión', 'Necesitas internet para sincronizar'); 
+      return; 
+    }
+    try { 
+      setRefreshing(true); 
+      await syncAll(); 
+      await loadLocalData(); 
+    }
+    finally { 
+      setRefreshing(false); 
+    }
   };
 
   const handleLogout = () => {
@@ -73,12 +85,7 @@ export default function HomeScreen({
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Salir', style: 'destructive',
-        onPress: async () => {
-          await StorageService.clearAuthData();
-          await SyncService.clearLocalData();
-          OdooService.clearSession();
-          onLogout?.();
-        },
+        onPress: onLogout,
       },
     ]);
   };

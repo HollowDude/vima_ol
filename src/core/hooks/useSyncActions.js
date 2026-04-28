@@ -4,6 +4,7 @@ import SyncService from '../sync/sync.service';
 import useNetwork from './useNetwork';
 import StorageService from '../storage/storage.service';
 import { STORAGE_KEYS } from '../sync/sync.constants';
+import { handleOdooError } from '../utils/odoo.error.handler';
 
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 2000;
@@ -12,7 +13,7 @@ function sleep(ms) {
   return new Promise(res => setTimeout(res, ms));
 }
 
-export default function useSyncActions() {
+export default function useSyncActions(onUnauthorized = () => {}) {
   const { isOnline } = useNetwork();
   const {
     startSync, finishSync, updatePhase,
@@ -66,7 +67,16 @@ export default function useSyncActions() {
         results.master.success = true;
       } catch (e) {
         results.master.error = e.message;
-        showToast('No se pudieron actualizar los datos base', 'warning', 4000);
+        
+        // Verificar si es error de autorización
+        const errorResult = handleOdooError(e, {
+          onLogout: onUnauthorized,
+          onShowToast: showToast,
+        }, { action: 'sincronizar datos base' });
+
+        if (!errorResult.shouldLogout) {
+          showToast('No se pudieron actualizar los datos base', 'warning', 4000);
+        }
       }
 
       // ── 2. Subir pendientes ────────────────────────────────────────────────
@@ -94,7 +104,24 @@ export default function useSyncActions() {
         await refreshPendingCount();
       } catch (e) {
         results.pending.error = e.message;
-        showToast('Error subiendo cambios pendientes', 'error', 5000);
+        
+        // Manejo de errores de pending con detección de autorización
+        const errorResult = handleOdooError(e, {
+          onLogout: onUnauthorized,
+          onShowToast: showToast,
+          onPermissionDenied: (error, context) => {
+            // Error de permisos específico en encuestas/cambios
+            showToast(
+              'No se pudieron guardar los cambios por falta de permisos. Ponte en contacto con un administrador.',
+              'warning',
+              6000
+            );
+          },
+        }, { action: 'subir cambios pendientes' });
+
+        if (!errorResult.shouldLogout) {
+          showToast('Error subiendo cambios pendientes', 'error', 5000);
+        }
       }
 
       // ── 3. Clientes, Tareas y Leads en paralelo ────────────────────────────
@@ -110,19 +137,30 @@ export default function useSyncActions() {
         results.clients.count   = clientsRes.value?.length || 0;
       } else {
         results.clients.error = clientsRes.reason?.message;
-        showToast('Error sincronizando clientes', 'error', 4000);
+        handleOdooError(clientsRes.reason, {
+          onLogout: onUnauthorized,
+          onShowToast: showToast,
+        }, { action: 'sincronizar clientes' });
+        if (!handleOdooError(clientsRes.reason, {}, {}).shouldLogout) {
+          showToast('Error sincronizando clientes', 'error', 4000);
+        }
       }
 
       if (tasksRes.status === 'fulfilled') {
         results.tasks.success = true;
         results.tasks.count   = tasksRes.value?.subtasks?.length || 0;
-        // ✅ SOLO si se sincronizó bien, purgar caché extendida
         if (tasksRes.value?.subtasks?.length) {
           await SyncService.purgeExtendedTasksWithIds(tasksRes.value.subtasks.map(t => t.id));
         }
       } else {
         results.tasks.error = tasksRes.reason?.message;
-        showToast('Error sincronizando tareas', 'error', 4000);
+        handleOdooError(tasksRes.reason, {
+          onLogout: onUnauthorized,
+          onShowToast: showToast,
+        }, { action: 'sincronizar tareas' });
+        if (!handleOdooError(tasksRes.reason, {}, {}).shouldLogout) {
+          showToast('Error sincronizando tareas', 'error', 4000);
+        }
       }
 
       if (leadsRes.status === 'fulfilled') {
@@ -130,7 +168,13 @@ export default function useSyncActions() {
         results.leads.count   = Array.isArray(leadsRes.value) ? leadsRes.value.length : 0;
       } else {
         results.leads.error = leadsRes.reason?.message;
-        showToast('Error sincronizando oportunidades', 'error', 4000);
+        handleOdooError(leadsRes.reason, {
+          onLogout: onUnauthorized,
+          onShowToast: showToast,
+        }, { action: 'sincronizar oportunidades' });
+        if (!handleOdooError(leadsRes.reason, {}, {}).shouldLogout) {
+          showToast('Error sincronizando oportunidades', 'error', 4000);
+        }
       }
 
       // ── 4. Comentarios ─────────────────────────────────────────────────────
@@ -149,7 +193,19 @@ export default function useSyncActions() {
         results.surveys.success = true;
       } catch (e) {
         results.surveys.error = e.message;
-        showToast('Error sincronizando encuestas', 'warning', 4000);
+        
+        // Manejo específico de errores en encuestas
+        handleOdooError(e, {
+          onLogout: onUnauthorized,
+          onShowToast: showToast,
+          onPermissionDenied: () => {
+            showToast(
+              'No se pudieron guardar los avances de la encuesta por falta de permisos. Ponte en contacto con un administrador.',
+              'warning',
+              6000
+            );
+          },
+        }, { action: 'procesar encuestas' });
       }
 
       // ── 6. Adjuntos ────────────────────────────────────────────────────────
@@ -186,6 +242,11 @@ export default function useSyncActions() {
       return results;
 
     } catch (fatalError) {
+      handleOdooError(fatalError, {
+        onLogout: onUnauthorized,
+        onShowToast: showToast,
+      });
+      
       showToast('Error crítico en sincronización', 'error', 6000);
       updatePhase('ERROR');
       await finishSync({ ...results, fatalError: fatalError.message });
@@ -193,7 +254,7 @@ export default function useSyncActions() {
     } finally {
       isSyncingRef.current = false;
     }
-  }, [isOnline, startSync, finishSync, updatePhase, showToast, refreshPendingCount, withRetry]);
+  }, [isOnline, startSync, finishSync, updatePhase, showToast, refreshPendingCount, withRetry, onUnauthorized]);
 
   const syncModule = useCallback(async (moduleName) => {
     if (!isOnline) {
@@ -204,7 +265,12 @@ export default function useSyncActions() {
     try {
       await SyncService.syncPendingChanges();
       await refreshPendingCount();
-    } catch (_) {}
+    } catch (e) {
+      handleOdooError(e, {
+        onLogout: onUnauthorized,
+        onShowToast: showToast,
+      });
+    }
 
     try {
       let result;
@@ -227,10 +293,13 @@ export default function useSyncActions() {
       await refreshPendingCount();
       return result;
     } catch (err) {
-      showToast(`Error actualizando ${LABEL_MAP[moduleName] || moduleName}`, 'error');
+      handleOdooError(err, {
+        onLogout: onUnauthorized,
+        onShowToast: showToast,
+      }, { action: `actualizar ${LABEL_MAP[moduleName] || moduleName}` });
       return null;
     }
-  }, [isOnline, showToast, refreshPendingCount]);
+  }, [isOnline, showToast, refreshPendingCount, onUnauthorized]);
 
   const notifyLocalWrite = useCallback(() => {
     refreshPendingCount();

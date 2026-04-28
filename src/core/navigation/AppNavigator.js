@@ -57,10 +57,42 @@ export default function AppNavigator() {
     setIsAuthenticated(true);
   };
 
-  const handleLogout = () => {
-    setUserData(null);
-    setIsAuthenticated(false);
-    setCurrentScreen('home');
+  /**
+   * Maneja el logout limpiando toda la sesión y datos locales
+   * @param {boolean} isUnauthorized - Si es true, indica que fue por error de autorización
+   */
+  const handleLogout = async (isUnauthorized = false) => {
+    try {
+      console.log('[AppNavigator] Iniciando logout...');
+      
+      // 1. Limpiar almacenamiento
+      await StorageService.clearAuthData();
+      
+      // 2. Limpiar datos de sincronización
+      await SyncService.clearLocalData();
+      
+      // 3. Limpiar sesión de Odoo
+      OdooService.clearSession();
+      
+      // 4. Reset de estado
+      setUserData(null);
+      setIsAuthenticated(false);
+      setCurrentScreen('home');
+      setUsername('');
+      
+      console.log('[AppNavigator] Logout completado');
+      
+      // Si fue por autorización inválida, el toast ya fue mostrado por el error handler
+      // Si fue logout manual, el usuario verá la pantalla de login
+      
+    } catch (error) {
+      console.error('[AppNavigator] Error en logout:', error);
+      // Aún así hacer reset de estado aunque haya error
+      setUserData(null);
+      setIsAuthenticated(false);
+      setCurrentScreen('home');
+      setUsername('');
+    }
   };
 
   if (isLoading) {
@@ -79,7 +111,7 @@ export default function AppNavigator() {
   const sharedProps = {
     userData,
     username,
-    onLogout: handleLogout,
+    onLogout: () => handleLogout(false), // Logout manual desde el menú
   };
 
   return (
@@ -88,18 +120,21 @@ export default function AppNavigator() {
         <TasksScreen
           {...sharedProps}
           onBack={() => setCurrentScreen('home')}
+          onUnauthorized={() => handleLogout(true)} // Logout por autorización inválida
         />
       )}
       {currentScreen === 'clients' && (
         <ClientsScreen
           {...sharedProps}
           onBack={() => setCurrentScreen('home')}
+          onUnauthorized={() => handleLogout(true)}
         />
       )}
       {currentScreen === 'leads' && (
         <LeadsScreen
           {...sharedProps}
           onBack={() => setCurrentScreen('home')}
+          onUnauthorized={() => handleLogout(true)}
         />
       )}
       {currentScreen === 'home' && (
@@ -108,6 +143,7 @@ export default function AppNavigator() {
           onNavigateToTasks={()   => setCurrentScreen('tasks')}
           onNavigateToClients={() => setCurrentScreen('clients')}
           onNavigateToLeads={()   => setCurrentScreen('leads')}
+          onUnauthorized={() => handleLogout(true)}
         />
       )}
     </SyncProvider>
