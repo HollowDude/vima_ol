@@ -17,10 +17,11 @@ export const STORAGE_KEYS = {
   SURVEY_PROGRESS: '@vima_survey_progress',
   COMMENTS: '@vima_comments',
   SURVEY_RELS: '@vima_survey_rels',
-  SURVEY_USER_INPUTS: '@vima_survey_user_inputs',  // ✅ Nuevo
+  SURVEY_USER_INPUTS: '@vima_survey_user_inputs',
   ATTACHMENTS: '@vima_attachments',
   LEADS: '@vima_leads',
   MASTER_CRM_STAGES: '@vima_master_crm_stages',
   PREVIOUS_PROJECT_ID: '@vima_previous_project_id',
   EXTENDED_TASKS: '@vima_extended_tasks',
+  SYNC_HISTORY: '@vima_sync_history',
 };

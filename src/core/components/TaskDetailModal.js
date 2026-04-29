@@ -4,12 +4,13 @@ import {
   TouchableOpacity, ScrollView, Alert, Platform, TextInput, ActivityIndicator
 } from 'react-native';
 import { Linking } from 'react-native';
-import { getSurveyUrl } from '../utils/surveyHelper';
 import { Feather } from '@expo/vector-icons';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 
 import SyncService from '../sync/sync.service';
 import SurveyModal from './SurveyModal';
+import SurveyResponsesModal from './SurveyResponsesModal';
+import StateSelectorModal from './StateSelectorModal';
 import CommentsSection from './CommentsSection';
 import AttachmentsModal from './AttachmentsModal';
 import SimpleDateTimePicker from './SimpleDateTimePicker';
@@ -58,7 +59,7 @@ const formatForOdoo = (dateObj) => {
   return dateObj.toISOString().replace('T', ' ').split('.')[0];
 };
 
-export default function TaskDetailModal({ visible, task, allTasks, isHistorical = false, onClose, onTaskUpdated }) {
+export default function TaskDetailModal({ visible, task, allTasks, isHistorical = false, onClose, onTaskUpdated, onNavigateToLeads }) {
   const { isOnline } = useNetwork();
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const panY = useRef(new Animated.Value(0)).current;
@@ -76,6 +77,11 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
   const [loadingSurveys, setLoadingSurveys] = useState(false);
   const [selectedSurvey, setSelectedSurvey] = useState(null);
   const [showSurveyModal, setShowSurveyModal] = useState(false);
+  const [showSurveyResponses, setShowSurveyResponses] = useState(false);
+  const [surveyToView, setSurveyToView] = useState(null);
+
+  const [showStateSelector, setShowStateSelector] = useState(false);
+  const [pendingStateChange, setPendingStateChange] = useState(null);
 
   const [showAttachmentsModal, setShowAttachmentsModal] = useState(false);
   const [associatedLead, setAssociatedLead] = useState(null);
@@ -164,6 +170,12 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
       ? parseOdooDate(task.start_date)
       : new Date(currentYear, currentMonth, 1);
     minDate.setHours(0, 0, 0, 0);
+    
+    const nowDate = new Date();
+    nowDate.setHours(0, 0, 0, 0);
+    if (nowDate > minDate) {
+      minDate = nowDate;
+    }
 
     let maxDate = task.finish_date
       ? parseOdooDate(task.finish_date)
@@ -183,21 +195,8 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
         const localProgress = await SyncService.getSurveyProgress(task.id, s.id, s.relation_id);
         let isCompleted = s.user_input?.state === 'done';
         if (localProgress?.state === 'done') isCompleted = true;
-        
-        // ✅ Construir URL usando el helper
-        const surveyUrl = getSurveyUrl(s);
 
-        console.log(`📋 Survey "${s.title}" (ID: ${s.id})`, {
-          has_survey_token: !!s.access_token,
-          survey_token: s.access_token ? '***' : 'N/A',
-          has_user_input: !!s.user_input,
-          has_answer_token: !!s.user_input?.access_token,
-          answer_token: s.user_input?.access_token ? '***' : 'N/A',
-          url: surveyUrl,
-          isCompleted
-        });
-
-        return { ...s, isCompleted, localProgress, surveyUrl };
+        return { ...s, isCompleted, localProgress };
       }));
       
       setTaskSurveys(enrichedSurveys);
@@ -276,13 +275,9 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
   const handleCancelEditDescription = () => {
     setDescriptionDraft(cleanDescription);
     setEditingDescription(false);
-  };
+};
 
   const handleSaveDescription = async () => {
-    if (!descriptionDraft.trim()) {
-      Alert.alert("Descripción vacía", "Debes escribir algo en la descripción.", [{ text: "Entendido" }]);
-      return;
-    }
     try {
       setSavingDescription(true);
       await SyncService.updateTaskLocally(task.id, { description: descriptionDraft.trim() });
@@ -299,8 +294,14 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
 
   const handleOpenSurvey = (survey) => {
     if (isHistorical) return;
-    setSelectedSurvey({ surveyId: survey.id, relationId: survey.relation_id });
-    setShowSurveyModal(true);
+    
+    if (survey.isCompleted) {
+      setSurveyToView({ surveyId: survey.id, relationId: survey.relation_id, title: survey.title });
+      setShowSurveyResponses(true);
+    } else {
+      setSelectedSurvey({ surveyId: survey.id, relationId: survey.relation_id });
+      setShowSurveyModal(true);
+    }
   };
 
   const handleCompleteTask = async () => {
@@ -382,6 +383,21 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
     const selectedTime = newDate.getTime();
     if (selectedTime < minDate.getTime()) { Alert.alert("Fecha inválida", `No puedes reprogramar antes del ${minDate.toLocaleDateString('es-ES')}.`); return; }
     if (selectedTime > maxDate.getTime()) { Alert.alert("Fecha inválida", `No puedes reprogramar después del ${maxDate.toLocaleDateString('es-ES')}.`); return; }
+    
+    const now = new Date();
+    const isToday = newDate.toDateString() === now.toDateString();
+    if (isToday) {
+      const selectedHour = newDate.getHours();
+      const currentHour = now.getHours();
+      const selectedMinute = newDate.getMinutes();
+      const currentMinute = now.getMinutes();
+      
+      if (selectedHour < currentHour || (selectedHour === currentHour && selectedMinute < currentMinute)) {
+        Alert.alert("Hora inválida", "Si seleccionas el día de hoy, la hora no puede ser anterior a la hora actual."); 
+        return;
+      }
+    }
+    
     const utcDateStr = formatForOdoo(newDate);
     try {
       await SyncService.updateTaskLocally(task.id, { date_deadline: utcDateStr });
@@ -404,29 +420,17 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
   };
 
   const showStateChangeOptions = () => {
-    const stateOptions = [
-      { id: '01_in_progress', name: 'En Proceso' },
-      { id: '02_changes_requested', name: 'Cambios Solicitados' },
-      { id: '03_approved', name: 'Aprobado' },
-      { id: '1_done', name: 'Finalizado' },
-      { id: '1_canceled', name: 'Cancelado' },
-      { id: '04_waiting_normal', name: 'En Espera' },
-    ];
-    const currentState = task.state;
-    const options = stateOptions.map(opt => ({
-      text: `${opt.name}${opt.id === currentState ? ' (Actual)' : ''}`,
-      onPress: () => {
-        if (opt.id === '1_done' && !taskHasDescription) { promptAddDescriptionThenComplete(); return; }
-        handleStateChange(opt.id);
-      },
-      style: opt.id === currentState ? 'cancel' : 'default',
-    }));
-    options.push({ text: 'Cancelar', style: 'cancel' });
-    Alert.alert('Cambiar Estado', 'Selecciona el nuevo estado para esta tarea:', options);
+    setShowStateSelector(true);
   };
 
   const handleStateChange = async (newState) => {
     if (newState === task.state) return;
+    
+    if (newState === '1_done' && !taskHasDescription) {
+      promptAddDescriptionThenComplete();
+      return;
+    }
+    
     try {
       await SyncService.updateTaskLocally(task.id, { state: newState });
       if (isOnline) {
@@ -494,6 +498,29 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
             onComplete={handleSurveyComplete}
           />
         )}
+        {showSurveyResponses && surveyToView && (
+          <SurveyResponsesModal
+            visible={showSurveyResponses}
+            survey={{ id: surveyToView.surveyId, title: surveyToView.title }}
+            taskId={task.id}
+            taskState={task.state}
+            relationId={surveyToView.relationId}
+            onClose={() => setShowSurveyResponses(false)}
+            onEditSurvey={() => {
+              setShowSurveyResponses(false);
+              setSelectedSurvey({ surveyId: surveyToView.surveyId, relationId: surveyToView.relationId });
+              setShowSurveyModal(true);
+            }}
+          />
+        )}
+        <StateSelectorModal
+          visible={showStateSelector}
+          currentState={task.state}
+          onClose={() => setShowStateSelector(false)}
+          onSelectState={handleStateChange}
+          requiresDescription={!taskHasDescription}
+          onRequireDescription={promptAddDescriptionThenComplete}
+        />
         <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={closeModal} />
 
         <Animated.View
@@ -555,12 +582,16 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
             </View>
 
             {associatedLead && (
-              <TouchableOpacity style={styles.leadTag} onPress={() => setShowLeadModal(true)} activeOpacity={0.7}>
+              <TouchableOpacity 
+                style={styles.leadTag} 
+                onPress={() => onNavigateToLeads ? onNavigateToLeads() : setShowLeadModal(true)} 
+                activeOpacity={0.7}
+              >
                 <View style={styles.leadTagLeft}>
                   <Feather name="briefcase" size={14} color="#3B82F6" />
                   <Text style={styles.leadTagText}>Oportunidad: {associatedLead.name}</Text>
                 </View>
-                <Feather name="external-link" size={14} color="#3B82F6" />
+                <Feather name={onNavigateToLeads ? "chevron-right" : "external-link"} size={14} color="#3B82F6" />
               </TouchableOpacity>
             )}
 
@@ -629,8 +660,8 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
                           />
                           {survey.isCompleted && !isHistorical && (
                             <View style={styles.editBadge}>
-                              <Feather name="edit-2" size={10} color="#15803d" />
-                              <Text style={styles.editBadgeText}>Editar</Text>
+                              <Feather name="eye" size={10} color="#15803d" />
+                              <Text style={styles.editBadgeText}>Ver Respuestas</Text>
                             </View>
                           )}
                         </View>
@@ -639,21 +670,6 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
                           {isHistorical ? 'No disponible' : (survey.isCompleted ? 'Completada' : 'Pendiente')}
                         </Text>
                       </TouchableOpacity>
-
-                      {/* ✅ Botón para abrir en web */}
-                      {survey.surveyUrl && survey.isCompleted && isOnline && !isHistorical && (
-                        <TouchableOpacity
-                          style={styles.surveyWebButton}
-                          onPress={() => handleOpenSurveyInWeb(survey.surveyUrl)}
-                          activeOpacity={0.7}
-                        >
-                          <Feather 
-                            name="external-link" 
-                            size={14} 
-                            color="#64c27b"
-                          />
-                        </TouchableOpacity>
-                      )}
                     </View>
                   ))}
                 </ScrollView>
@@ -1010,7 +1026,7 @@ const styles = StyleSheet.create({
   surveyStatusText:   { fontSize: 10, fontWeight: '500', color: '#6B7280', marginTop: 4 },
   editBadge: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff',
-    paddingHorizontal: 4, paddingVertical: 0, borderRadius: 4,
+    paddingHorizontal: 1, paddingVertical: 0, borderRadius: 4,
   },
   editBadgeText: { fontSize: 9, color: '#15803d', marginLeft: 2, fontWeight: 'bold' },
 

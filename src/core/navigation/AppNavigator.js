@@ -5,6 +5,7 @@ import HomeScreen from '../../modules/Home/screens/HomeScreen';
 import TasksScreen from '../../modules/Tasks/screens/TasksScreen';
 import ClientsScreen from '../../modules/Clients/screens/ClientsScreen';
 import LeadsScreen from '../../modules/Leads/screens/LeadsScreen';
+import SyncHistoryScreen from '../../modules/SyncHistory/screens/SyncHistoryScreen';
 import StorageService from '../storage/storage.service';
 import OdooService from '../api/odoo.service';
 import SyncService from '../sync/sync.service';
@@ -129,7 +130,10 @@ export default function AppNavigator() {
   const sharedProps = {
     userData,
     username,
-    onLogout: () => handleLogout(false), // Logout manual desde el menú
+    onLogout: () => handleLogout(false),
+    onNavigateToLeads: () => setCurrentScreen('leads'),
+    onNavigateToTasks: () => setCurrentScreen('tasks'),
+    onNavigateToSyncHistory: () => setCurrentScreen('syncHistory'),
   };
 
   return (
@@ -162,6 +166,12 @@ export default function AppNavigator() {
           onNavigateToClients={() => setCurrentScreen('clients')}
           onNavigateToLeads={()   => setCurrentScreen('leads')}
           onUnauthorized={() => handleLogout(true)}
+        />
+      )}
+      {currentScreen === 'syncHistory' && (
+        <SyncHistoryScreen
+          {...sharedProps}
+          onBack={() => setCurrentScreen('home')}
         />
       )}
     </SyncProvider>

@@ -8,6 +8,7 @@ import * as Utils from './sync.utils';
 import * as Session from './sync.session';
 import * as Comments from './sync.comments';
 import * as Attachments from './sync.attachments';
+import SyncHistory from './sync.history';
 import { STORAGE_KEYS } from './sync.constants';
 import StorageService from '../storage/storage.service';
 import OdooService from '../api/odoo.service';
@@ -16,6 +17,10 @@ class SyncService {
   constructor() {}
 
   async syncAll() {
+    const startTime = Date.now();
+    let entryResult = { created: 0, updated: 0, deleted: 0, failed: 0 };
+    let models = [];
+    
     try {
       const { projectChanged, oldProject } = await this.syncMasterData();
 
@@ -65,7 +70,16 @@ class SyncService {
       try {
         await StorageService.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
       } catch (e) {}
-
+      
+      await SyncHistory.addSyncHistoryEntry({
+        type: 'syncAll',
+        direction: 'both',
+        status: 'success',
+        duration: Date.now() - startTime,
+        details: entryResult,
+        models,
+      });
+      
       return {
         clients: clientsResult,
         macrotasks: (tasksResult && tasksResult.macrotasks) ? tasksResult.macrotasks : [],
@@ -76,6 +90,17 @@ class SyncService {
       };
     } catch (error) {
       console.error('❌ Error en syncAll:', error);
+      
+      await SyncHistory.addSyncHistoryEntry({
+        type: 'syncAll',
+        direction: 'both',
+        status: 'failed',
+        duration: Date.now() - startTime,
+        error: error.message || 'Error desconocido',
+        details: entryResult,
+        models,
+      });
+      
       throw error;
     }
   }
@@ -95,12 +120,38 @@ class SyncService {
 
   // Pendientes
   async syncPendingChanges() {
+    const startTime = Date.now();
+    let entryResult = { created: 0, updated: 0, deleted: 0, failed: 0 };
+    
     try {
       const surveyResult = await Surveys.syncSurveyResponses();
       const otherResult = await Pending.syncPendingChangesNonSurvey();
+      
+      entryResult.created = (surveyResult?.success || 0) + (otherResult?.success || 0);
+      entryResult.failed = (surveyResult?.failed || 0) + (otherResult?.failed || 0);
+      
+      await SyncHistory.addSyncHistoryEntry({
+        type: 'syncPending',
+        direction: 'push',
+        status: entryResult.failed > 0 ? 'partial' : 'success',
+        duration: Date.now() - startTime,
+        details: entryResult,
+        models: ['survey.user_input', 'project.task', 'crm.lead'],
+      });
+      
       return { surveyResult, otherResult };
     } catch (error) {
       console.error('❌ Error en syncPendingChanges:', error);
+      
+      await SyncHistory.addSyncHistoryEntry({
+        type: 'syncPending',
+        direction: 'push',
+        status: 'failed',
+        duration: Date.now() - startTime,
+        error: error.message || 'Error desconocido',
+        details: entryResult,
+      });
+      
       throw error;
     }
   }

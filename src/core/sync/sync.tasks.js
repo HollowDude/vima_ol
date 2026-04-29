@@ -244,9 +244,7 @@ export async function updateTaskLocally(taskId, updates = {}, opts = {}) {
  * • Desarrollo  → 1 minuto  (para poder probar la expiración rápidamente)
  * • Producción  → 24 horas
  */
-export const EXTENDED_TASKS_TTL_MS = __DEV__
-  ? 60 * 2000              // 1 min  — desarrollo
-  : 60 * 2000;  // 24 * 60 * 60 * 1000 - 24 h   — producción
+export const EXTENDED_TASKS_TTL_MS = 24 * 60 * 60 * 1000;  // 24 * 60 * 60 * 1000 - 24 h   — producción
 
 async function _readCache() {
   const stored  = (await StorageService.getItem(STORAGE_KEYS.EXTENDED_TASKS)) || { batches: [] };

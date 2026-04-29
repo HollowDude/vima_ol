@@ -12,6 +12,7 @@ export default function SurveyResponsesModal({
   visible,
   survey,
   taskId,
+  taskState,
   relationId,
   onClose,
   onEditSurvey,
@@ -19,28 +20,45 @@ export default function SurveyResponsesModal({
   const [loading, setLoading] = useState(true);
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
+  const isTaskDone = taskState === '1_done';
 
   useEffect(() => {
+    console.log('[SurveyResponsesModal] useEffect triggered, visible:', visible, 'survey?.id:', survey?.id);
     if (visible && survey?.id) {
       loadSurveyResponses();
     }
-  }, [visible, survey?.id]);
+  }, [visible, survey?.id, taskId, relationId]);
 
   const loadSurveyResponses = async () => {
     try {
       setLoading(true);
 
+      console.log('[SurveyResponsesModal] === INICIO ===');
+      console.log('[SurveyResponsesModal] Params:', { surveyId: survey?.id, taskId, relationId });
+      console.log('[SurveyResponsesModal] Survey:', survey);
+
       // Obtener preguntas
       const questionsData = await SyncService.getSurveyQuestions(survey.id);
-      setQuestions(questionsData);
+      console.log('[SurveyResponsesModal] Preguntas obtenidas:', questionsData?.length || 0);
+      console.log('[SurveyResponsesModal] Primera pregunta:', questionsData?.[0]);
+      setQuestions(questionsData || []);
 
       // Obtener respuestas guardadas
       const progress = await SyncService.getSurveyProgress(taskId, survey.id, relationId);
-      if (progress) {
-        setAnswers(progress.answers || {});
+      console.log('[SurveyResponsesModal] Progreso key:', `${taskId}_${survey.id}_${relationId}`);
+      console.log('[SurveyResponsesModal] Progreso:', progress);
+      console.log('[SurveyResponsesModal] Answers:', progress?.answers);
+      
+      if (progress && progress.answers) {
+        setAnswers(progress.answers);
+        console.log('[SurveyResponsesModal] Answers guardadas en estado');
+        console.log('[SurveyResponsesModal] questions state:', questions.length);
+      } else {
+        setAnswers({});
+        console.log('[SurveyResponsesModal] Sin respuestas guardadas');
       }
     } catch (error) {
-      console.error('Error cargando respuestas:', error);
+      console.error('[SurveyResponsesModal] Error:', error);
       Alert.alert('Error', 'No se pudieron cargar las respuestas');
       onClose();
     } finally {
@@ -221,11 +239,13 @@ export default function SurveyResponsesModal({
                   contentContainerStyle={styles.responsesContent}
                   showsVerticalScrollIndicator={true}
                 >
-                  <Text style={styles.responsesTitle}>TUS RESPUESTAS</Text>
 
                   {questions.map((question, index) => {
-                    const answer = answers[question.id];
+                    const questionId = String(question.id);
+                    const answer = answers[questionId] || answers[question.id];
                     const isAnswered = !!answer;
+
+                    console.log('[SurveyResponsesModal] question.id:', question.id, 'answer:', answer);
 
                     return (
                       <View key={question.id} style={styles.questionContainer}>
@@ -235,31 +255,27 @@ export default function SurveyResponsesModal({
                           </View>
                           <View style={styles.questionTitleContainer}>
                             <Text style={styles.questionTitle}>{question.title}</Text>
-                            <View
-                              style={[
-                                styles.answerStatusBadge,
-                                isAnswered ? styles.answerStatusBadgeDone : styles.answerStatusBadgeEmpty,
-                              ]}
-                            >
-                              <Feather
-                                name={isAnswered ? 'check' : 'alert-circle'}
-                                size={12}
-                                color={isAnswered ? '#10B981' : '#9CA3AF'}
-                              />
-                              <Text
-                                style={[
-                                  styles.answerStatusText,
-                                  isAnswered ? styles.answerStatusTextDone : styles.answerStatusTextEmpty,
-                                ]}
-                              >
-                                {isAnswered ? 'Respondida' : 'Sin responder'}
-                              </Text>
-                            </View>
+                            <Text style={styles.questionTypeText}>
+                              Tipo: {question.question_type === 'char_box' ? 'Texto breve' : 
+                                   question.question_type === 'text_box' ? 'Texto largo' :
+                                   question.question_type === 'numerical_box' ? 'Número' :
+                                   question.question_type === 'date' ? 'Fecha' :
+                                   question.question_type === 'datetime' ? 'Fecha y hora' :
+                                   question.question_type === 'simple_choice' ? 'Opción única' :
+                                   question.question_type === 'multiple_choice' ? 'Opciones múltiples' :
+                                   question.question_type === 'scale' ? 'Escala' :
+                                   question.question_type === 'matrix' ? 'Matriz' : question.question_type}
+                            </Text>
                           </View>
                         </View>
 
-                        <View style={styles.answerBox}>
-                          <Text style={styles.answerText}>{formatAnswer(question, answer)}</Text>
+                        <View style={[styles.answerBox, isAnswered ? styles.answerBoxFilled : styles.answerBoxEmpty]}>
+                          <Text style={[styles.answerLabel]}>
+                            {isAnswered ? 'Tu respuesta:' : 'Sin responder'}
+                          </Text>
+                          <Text style={[styles.answerText, !isAnswered && styles.answerTextEmpty]}>
+                            {formatAnswer(question, answer)}
+                          </Text>
                         </View>
                       </View>
                     );
@@ -277,11 +293,14 @@ export default function SurveyResponsesModal({
                     <Text style={styles.actionButtonSecondaryText}>Cerrar</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[styles.actionButton, styles.actionButtonPrimary]}
-                    onPress={handleEditSurvey}
+                    style={[styles.actionButton, styles.actionButtonPrimary, isTaskDone && styles.actionButtonDisabled]}
+                    onPress={isTaskDone ? undefined : handleEditSurvey}
+                    disabled={isTaskDone}
                   >
-                    <Feather name="edit-2" size={16} color="#fff" />
-                    <Text style={styles.actionButtonPrimaryText}>Volver a responder</Text>
+                    <Feather name="edit-2" size={16} color={isTaskDone ? '#9CA3AF' : '#fff'} />
+                    <Text style={[styles.actionButtonPrimaryText, isTaskDone && styles.actionButtonTextDisabled]}>
+                      {isTaskDone ? 'Tarea finalizada' : 'Volver a responder'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -316,7 +335,8 @@ const styles = StyleSheet.create({
   cardContainer: {
     width: Math.min(SCREEN_WIDTH - 40, 500),
     maxHeight: SCREEN_HEIGHT * 0.85,
-  },
+    flexDirection: 'column',
+  },  
   card: {
     backgroundColor: '#fff',
     borderRadius: 16,
@@ -327,7 +347,7 @@ const styles = StyleSheet.create({
     elevation: 8,
     overflow: 'hidden',
     flexDirection: 'column',
-    maxHeight: SCREEN_HEIGHT * 0.85,
+    height: Math.min(SCREEN_HEIGHT * 0.85, SCREEN_HEIGHT - 100),
   },
   header: {
     flexDirection: 'row',
@@ -400,6 +420,7 @@ const styles = StyleSheet.create({
   },
   responsesScroll: {
     flex: 1,
+    overflow: 'hidden',
   },
   responsesContent: {
     padding: 20,
@@ -438,12 +459,20 @@ const styles = StyleSheet.create({
   questionTitleContainer: {
     flex: 1,
     gap: 6,
+    height: 55
   },
   questionTitle: {
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
-    lineHeight: 18,
+    lineHeight: 14, // Solo cambia esto
+    flex: 1,
+  },
+  questionTypeText: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: 2,
+    textTransform: 'capitalize',
   },
   answerStatusBadge: {
     flexDirection: 'row',
@@ -477,10 +506,30 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 12,
   },
+  answerBoxFilled: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#10B981',
+  },
+  answerBoxEmpty: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#EF4444',
+  },
+  answerLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#6B7280',
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
   answerText: {
     fontSize: 14,
     color: '#374151',
     lineHeight: 18,
+  },
+  answerTextEmpty: {
+    fontSize: 14,
+    color: '#9CA3AF',
+    fontStyle: 'italic',
   },
   footer: {
     flexDirection: 'row',
@@ -512,6 +561,12 @@ const styles = StyleSheet.create({
   },
   actionButtonPrimary: {
     backgroundColor: '#64c27b',
+  },
+  actionButtonDisabled: {
+    backgroundColor: '#E5E7EB',
+  },
+  actionButtonTextDisabled: {
+    color: '#9CA3AF',
   },
   actionButtonPrimaryText: {
     fontSize: 14,

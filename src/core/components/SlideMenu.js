@@ -117,7 +117,7 @@ function SyncPanel({ isOnline, isSyncing, lastSync, pendingCount, statusLabel, a
 }
 
 // ── Componente principal ──────────────────────────────────────────────────────
-export default function SlideMenu({ visible, onClose, userData, username, onLogout }) {
+export default function SlideMenu({ visible, onClose, userData, username, onLogout, onNavigateToSyncHistory }) {
   const { isOnline } = useNetwork();
   const { pendingCount, lastSync, isSyncing, statusLabel, refreshPendingCount } = useSyncContext();
   const [byModel, setByModel] = useState({});
@@ -228,6 +228,15 @@ export default function SlideMenu({ visible, onClose, userData, username, onLogo
 
             <TouchableOpacity
               style={styles.logoutButton}
+              onPress={() => { onClose?.(); onNavigateToSyncHistory?.(); }}
+              activeOpacity={0.7}
+            >
+              <Feather name="history" size={18} color="#3B82F6" />
+              <Text style={styles.syncHistoryText}>Historial de sincronización</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.logoutButton}
               onPress={() => { onClose?.(); onLogout?.(); }}
               activeOpacity={0.7}
             >
@@ -315,6 +324,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#bb2525',
+    marginLeft: 10,
+  },
+  syncHistoryText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#3B82F6',
     marginLeft: 10,
   },
   dividerSmall: {

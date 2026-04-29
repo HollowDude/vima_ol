@@ -7,8 +7,6 @@ import { Feather } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Slider from '@react-native-community/slider';
 import SyncService from '../sync/sync.service';
-import useNetwork from '../hooks/useNetwork';
-import { getSurveyUrl } from '../utils/surveyHelper';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -22,9 +20,6 @@ function QuestionCard({
   onPrev,
   onNext,
   onClose,
-  onOpenWeb,
-  isOnline,
-  surveyUrl,
 
 }) {
   const [localAnswer, setLocalAnswer] = useState({});
@@ -563,34 +558,10 @@ function QuestionCard({
               />
             </View>
           </View>
-          <View style={styles.headerRightActions}>
-            {surveyUrl && isOnline && survey?.user_input?.state === 'done' && (
-              <TouchableOpacity 
-                onPress={onOpenWeb}
-                style={styles.webButton}
-                activeOpacity={0.7}
-              >
-                <Feather 
-                  name="external-link" 
-                  size={16} 
-                  color="#64c27b"
-                />
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-              <Feather name="x" size={20} color="#6B7280" />
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+            <Feather name="x" size={20} color="#6B7280" />
+          </TouchableOpacity>
         </View>
-
-        {surveyUrl && !isOnline && (
-          <View style={styles.offlineBanner}>
-            <Feather name="wifi-off" size={14} color="#B45309" />
-            <Text style={styles.offlineBannerText}>
-              Necesitas conexión para abrir la encuesta en web
-            </Text>
-          </View>
-        )}
 
         <ScrollView 
           style={styles.questionScroll} 
@@ -640,14 +611,12 @@ function QuestionCard({
 }
 
 export default function SurveyModal({ visible, taskId, surveyId, relationId, onClose, onComplete }) {
-  const { isOnline } = useNetwork();
   const [loading, setLoading] = useState(true);
   const [survey, setSurvey] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [answers, setAnswers] = useState({});
   const [userInputId, setUserInputId] = useState(null);
-  const [surveyUrl, setSurveyUrl] = useState(null);
 
   useEffect(() => {
     if (visible && surveyId) {
@@ -676,16 +645,6 @@ export default function SurveyModal({ visible, taskId, surveyId, relationId, onC
       setSurvey(surveyData);
       setQuestions(questionsData);
 
-      // ✅ Construir URL usando el helper
-      const url = getSurveyUrl(surveyData);
-      setSurveyUrl(url);
-      
-      if (url) {
-        console.log('✅ URL de encuesta construida:', url);
-      } else {
-        console.warn('⚠️ No se pudo construir URL de encuesta');
-      }
-
       const existingInput = await SyncService.getSurveyProgress(taskId, surveyId, relationId);
       
       if (existingInput) {
@@ -708,25 +667,6 @@ export default function SurveyModal({ visible, taskId, surveyId, relationId, onC
       onClose();
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleOpenWebSurvey = async () => {
-    if (!surveyUrl) {
-      Alert.alert('Error', 'No se pudo obtener la URL de la encuesta');
-      return;
-    }
-
-    try {
-      const canOpen = await Linking.canOpenURL(surveyUrl);
-      if (canOpen) {
-        await Linking.openURL(surveyUrl);
-      } else {
-        Alert.alert('Error', 'No se puede abrir la URL en el navegador');
-      }
-    } catch (error) {
-      console.error('Error abriendo URL:', error);
-      Alert.alert('Error', 'No se pudo abrir la encuesta: ' + error.message);
     }
   };
 
@@ -894,10 +834,6 @@ export default function SurveyModal({ visible, taskId, surveyId, relationId, onC
                   onPrev={handlePrev}
                   onNext={handleNext}
                   onClose={handleBackdropPress}
-                  // Props para botón web
-                  onOpenWeb={handleOpenWebSurvey}
-                  isOnline={isOnline}
-                  surveyUrl={surveyUrl}
                 />
               )}
             </View>

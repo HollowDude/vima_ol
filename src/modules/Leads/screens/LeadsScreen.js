@@ -9,6 +9,7 @@ import Card from '../../../core/components/Card';
 import DashboardHeader from '../../../core/components/DashboardHeader';
 import LeadCard from '../../../core/components/LeadCard';
 import LeadDetailModal from '../../../core/components/LeadDetailModal';
+import TaskDetailModal from '../../../core/components/TaskDetailModal';
 import CreateLeadModal from '../../../core/components/CreateLeadModal';
 import ToastContainer from '../../../core/components/ToastContainer';
 import SlideMenu from '../../../core/components/SlideMenu';
@@ -20,7 +21,7 @@ import { usePrevious } from '../../../core/hooks/usePrevious';
 import { formatCurrency, getCurrencyCode } from '../../../core/utils/currencyhelper';
 import OdooService from '../../../core/api/odoo.service';
 
-export default function LeadsScreen({ userData, username, onBack, onLogout }) {
+export default function LeadsScreen({ userData, username, onBack, onLogout, onNavigateToTasks }) {
   const { isOnline }            = useNetwork();
   const { syncAll, syncModule } = useSyncActions();
 
@@ -29,6 +30,7 @@ export default function LeadsScreen({ userData, username, onBack, onLogout }) {
   const [stages, setStages]                     = useState([]);
   const [selectedStage, setSelectedStage]       = useState(null);
   const [selectedLead, setSelectedLead]         = useState(null);
+  const [selectedTask, setSelectedTask]       = useState(null);
   const [isCreateModalVisible, setCreateModal]  = useState(false);
   const [menuVisible, setMenuVisible]           = useState(false);
   const [refreshing, setRefreshing]             = useState(false);
@@ -342,6 +344,14 @@ export default function LeadsScreen({ userData, username, onBack, onLogout }) {
           onClose={() => setSelectedLead(null)}
           onLeadUpdated={handleLeadUpdated}
           onLeadDeleted={handleLeadDeleted}
+          onViewTask={(task) => setSelectedTask(task)}
+        />
+        <TaskDetailModal
+          visible={!!selectedTask}
+          task={selectedTask}
+          allTasks={[]}
+          onClose={() => setSelectedTask(null)}
+          onNavigateToLeads={onNavigateToTasks}
         />
         <CreateLeadModal
           visible={isCreateModalVisible} userData={userData}

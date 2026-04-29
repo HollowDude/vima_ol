@@ -55,7 +55,7 @@ const SelectorField = ({ label, value, placeholder, onPress }) => (
   </View>
 );
 
-export default function LeadDetailModal({ visible, lead, onClose, onLeadUpdated, onLeadDeleted }) {
+export default function LeadDetailModal({ visible, lead, onClose, onLeadUpdated, onLeadDeleted, onViewTask }) {
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const panY = useRef(new Animated.Value(0)).current;
 
@@ -375,11 +375,15 @@ export default function LeadDetailModal({ visible, lead, onClose, onLeadUpdated,
   };
 
   const handleTaskPress = (task) => {
-    Alert.alert(
-      task.display_name || task.name,
-      `Estado: ${task.state || 'Sin estado'}\nFecha: ${task.date_deadline || 'Sin fecha'}`,
-      [{ text: 'OK' }]
-    );
+    if (onViewTask) {
+      onViewTask(task);
+    } else {
+      Alert.alert(
+        task.display_name || task.name,
+        `Estado: ${task.state || 'Sin estado'}\nFecha: ${task.date_deadline || 'Sin fecha'}`,
+        [{ text: 'OK' }]
+      );
+    }
   };
 
   if (!lead) return null;

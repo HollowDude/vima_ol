@@ -267,7 +267,7 @@ function DayTasksModal({ visible, date, tasks, onClose, onSelectTask }) {
 }
 
 // ─── TasksScreen ───────────────────────────────────────────────────────────────
-export default function TasksScreen({ userData, username, onBack, onLogout }) {
+export default function TasksScreen({ userData, username, onBack, onLogout, onNavigateToLeads }) {
   const { isOnline }            = useNetwork();
   const { syncAll, syncModule } = useSyncActions();
   const scrollViewRef           = useRef(null);
@@ -1325,6 +1325,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout }) {
           isHistorical={selectedTask ? extendedTaskIds.has(selectedTask.id) : false}
           onClose={() => setSelectedTask(null)}
           onTaskUpdated={handleTaskUpdated}
+          onNavigateToLeads={onNavigateToLeads}
         />
         <CreateTaskModal
           visible={isCreateModalVisible}
