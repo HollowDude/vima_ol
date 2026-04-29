@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, Dimensions, RefreshControl, Alert
+  View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert
 } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import SyncHistoryService from '../../../core/sync/sync.history';
 import useNetwork from '../../../core/hooks/useNetwork';
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const STATUS_COLORS = {
   success: '#10B981',
@@ -59,6 +58,19 @@ function getStatusLabel(status) {
   }
 }
 
+function getTypeLabel(type) {
+  switch (type) {
+    case 'syncAll': return 'Sincronización completa';
+    case 'syncPending': return 'Cambios pendientes';
+    case 'manual': return 'Sincronización manual';
+    case 'survey': return 'Encuesta';
+    case 'task': return 'Tarea';
+    case 'lead': return 'Oportunidad';
+    case 'client': return 'Cliente';
+    default: return type;
+  }
+}
+
 function SyncHistoryItem({ item }) {
   const statusColor = STATUS_COLORS[item.status] || STATUS_COLORS.partial;
   const iconName = TYPE_ICONS[item.type] || 'activity';
@@ -69,16 +81,10 @@ function SyncHistoryItem({ item }) {
         <View style={[styles.statusIndicator, { backgroundColor: statusColor }]} />
         <Feather name={iconName} size={18} color={statusColor} />
         <View style={styles.itemInfo}>
-          <Text style={styles.itemType}>
-            {item.type === 'syncAll' ? 'Sincronización completa' :
-             item.type === 'syncPending' ? 'Cambios pendientes' :
-             item.type === 'manual' ? 'Sincronización manual' :
-             item.type === 'survey' ? 'Encuesta' :
-             item.type === 'task' ? 'Tarea' :
-             item.type === 'lead' ? 'Oportunidad' :
-             item.type}
+          <Text style={styles.itemType} numberOfLines={1}>
+            {getTypeLabel(item.type)}
           </Text>
-          <Text style={styles.itemDate}>
+          <Text style={styles.itemDate} numberOfLines={1}>
             {formatDate(item.timestamp)} • {formatTime(item.timestamp)}
           </Text>
         </View>
@@ -126,7 +132,7 @@ function SyncHistoryItem({ item }) {
       {item.error && (
         <View style={styles.errorRow}>
           <Feather name="alert-circle" size={12} color="#EF4444" />
-          <Text style={styles.errorText}>{item.error}</Text>
+          <Text style={styles.errorText} numberOfLines={2}>{item.error}</Text>
         </View>
       )}
       
@@ -134,7 +140,9 @@ function SyncHistoryItem({ item }) {
         <View style={styles.modelsRow}>
           {item.models.slice(0, 3).map((model, idx) => (
             <View key={idx} style={styles.modelChip}>
-              <Text style={styles.modelText}>{model.split('.')[1] || model}</Text>
+              <Text style={styles.modelText} numberOfLines={1}>
+                {model.split('.')[1] || model}
+              </Text>
             </View>
           ))}
           {item.models.length > 3 && (
@@ -146,15 +154,20 @@ function SyncHistoryItem({ item }) {
   );
 }
 
-export default function SyncHistoryScreen({ userData, username, onBack, onLogout }) {
+function SyncHistoryScreenContent({ onBack, onLogout }) {
+  const insets = useSafeAreaInsets();
   const { isOnline } = useNetwork();
   const [history, setHistory] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState('all');
 
   const loadHistory = useCallback(async () => {
-    const data = await SyncHistoryService.getSyncHistory();
-    setHistory(data);
+    try {
+      const data = await SyncHistoryService.getSyncHistory();
+      setHistory(data);
+    } catch (error) {
+      console.error('Error cargando historial:', error);
+    }
   }, []);
 
   useEffect(() => {
@@ -173,26 +186,28 @@ export default function SyncHistoryScreen({ userData, username, onBack, onLogout
       '¿Estás seguro de que quieres borrar todo el historial?',
       [
         { text: 'Cancelar', style: 'cancel' },
-        { text: 'Borrar', style: 'destructive', onPress: async () => {
-          await SyncHistoryService.clearSyncHistory();
-          loadHistory();
-        }},
+        { 
+          text: 'Borrar', 
+          style: 'destructive', 
+          onPress: async () => {
+            await SyncHistoryService.clearSyncHistory();
+            await loadHistory();
+          }
+        },
       ]
     );
   };
 
   const filteredHistory = history.filter(item => {
     if (filter === 'all') return true;
-    if (filter === 'success') return item.status === 'success';
-    if (filter === 'partial') return item.status === 'partial';
-    if (filter === 'failed') return item.status === 'failed';
-    return true;
+    return item.status === filter;
   });
 
   const renderFilterButton = (filterValue, label) => (
     <TouchableOpacity
       style={[styles.filterButton, filter === filterValue && styles.filterButtonActive]}
       onPress={() => setFilter(filterValue)}
+      activeOpacity={0.7}
     >
       <Text style={[styles.filterButtonText, filter === filterValue && styles.filterButtonTextActive]}>
         {label}
@@ -201,10 +216,11 @@ export default function SyncHistoryScreen({ userData, username, onBack, onLogout
   );
 
   return (
-    <View style={styles.screenContainer}>
+    <View style={[styles.screenContainer, { paddingTop: insets.top }]}>
+      {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerTop}>
-          <TouchableOpacity onPress={onBack} style={styles.backButton}>
+          <TouchableOpacity onPress={onBack} style={styles.backButton} activeOpacity={0.7}>
             <Feather name="arrow-left" size={24} color="#374151" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Historial de Sincronización</Text>
@@ -221,13 +237,19 @@ export default function SyncHistoryScreen({ userData, username, onBack, onLogout
         </View>
       </View>
 
+      {/* Lista */}
       <FlatList
         data={filteredHistory}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => <SyncHistoryItem item={item} />}
         contentContainerStyle={styles.listContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#64c27b']} />
+          <RefreshControl 
+            refreshing={refreshing} 
+            onRefresh={onRefresh} 
+            colors={['#64c27b']}
+            tintColor="#64c27b"
+          />
         }
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
@@ -238,13 +260,27 @@ export default function SyncHistoryScreen({ userData, username, onBack, onLogout
             </Text>
           </View>
         }
+        scrollIndicatorInsets={{ right: 1 }}
       />
 
-      <TouchableOpacity style={styles.clearButton} onPress={handleClearHistory}>
+      {/* Botón limpiar */}
+      <TouchableOpacity 
+        style={styles.clearButton} 
+        onPress={handleClearHistory}
+        activeOpacity={0.7}
+      >
         <Feather name="trash-2" size={16} color="#EF4444" />
         <Text style={styles.clearButtonText}>Limpiar historial</Text>
       </TouchableOpacity>
     </View>
+  );
+}
+
+export default function SyncHistoryScreen({ onBack, onLogout }) {
+  return (
+    <SafeAreaProvider>
+      <SyncHistoryScreenContent onBack={onBack} onLogout={onLogout} />
+    </SafeAreaProvider>
   );
 }
 
@@ -253,24 +289,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f0ebff',
   },
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-  },
-  modalContainer: {
-    backgroundColor: '#f5f0ebff',
-    margin: 20,
-    borderRadius: 16,
-    maxHeight: '80%',
-  },
   header: {
     backgroundColor: '#fff',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    paddingTop: 16,
     paddingHorizontal: 16,
-    paddingBottom: 12,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
@@ -280,7 +302,8 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   backButton: {
-    padding: 4,
+    padding: 8,
+    marginLeft: -8,
   },
   headerTitle: {
     flex: 1,
@@ -320,6 +343,7 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: 12,
+    paddingBottom: 20,
   },
   itemCard: {
     backgroundColor: '#fff',
@@ -382,6 +406,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginTop: 10,
     gap: 8,
+    flexWrap: 'wrap',
   },
   detailBadge: {
     backgroundColor: '#ECFDF5',
@@ -425,6 +450,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
+    maxWidth: '50%',
   },
   modelText: {
     fontSize: 11,
@@ -438,7 +464,7 @@ const styles = StyleSheet.create({
   },
   emptyContainer: {
     alignItems: 'center',
-    paddingVertical: 40,
+    paddingVertical: 60,
   },
   emptyText: {
     fontSize: 16,
@@ -459,6 +485,7 @@ const styles = StyleSheet.create({
     gap: 8,
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
+    backgroundColor: '#fff',
   },
   clearButtonText: {
     fontSize: 14,

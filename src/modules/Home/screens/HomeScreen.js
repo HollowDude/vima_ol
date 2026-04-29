@@ -16,13 +16,17 @@ import { useSyncContext } from '../../../core/context/SyncContext';
 import { usePrevious } from '../../../core/hooks/usePrevious';
 
 export default function HomeScreen({
-  userData, onLogout, username,
-  onNavigateToTasks, onNavigateToClients, onNavigateToLeads,
-  onUnauthorized = () => {}, // Callback para logout por autorización inválida
+  userData, 
+  onLogout, 
+  username,
+  onNavigateToTasks, 
+  onNavigateToClients, 
+  onNavigateToLeads,
+  onNavigateToSyncHistory,
+  onUnauthorized = () => {},
 }) {
   const { isOnline } = useNetwork();
   
-  // Pasar onUnauthorized a useSyncActions
   const { syncAll }  = useSyncActions(onUnauthorized);
   const { lastSync } = useSyncContext();
 
@@ -36,7 +40,9 @@ export default function HomeScreen({
 
   const prevOnline = usePrevious(isOnline);
 
-  useEffect(() => { loadLocalData().finally(() => setIsReady(true)); }, []);
+  useEffect(() => { 
+    loadLocalData().finally(() => setIsReady(true)); 
+  }, []);
 
   useEffect(() => {
     if (!isReady) return;
@@ -62,7 +68,9 @@ export default function HomeScreen({
         else if (t.state === '1_done') done++;
       });
       setTasksStats({ active, done });
-    } catch (e) { console.error('[Home]', e); }
+    } catch (e) { 
+      console.error('[Home]', e); 
+    }
   };
 
   const handleRefresh = async () => {
@@ -84,7 +92,8 @@ export default function HomeScreen({
     Alert.alert('Cerrar sesión', '¿Estás seguro?', [
       { text: 'Cancelar', style: 'cancel' },
       {
-        text: 'Salir', style: 'destructive',
+        text: 'Salir', 
+        style: 'destructive',
         onPress: onLogout,
       },
     ]);
@@ -101,19 +110,25 @@ export default function HomeScreen({
 
   const menuItems = [
     {
-      icon: 'users', title: 'Clientes', subtitle: 'Gestiona tus clientes',
+      icon: 'users', 
+      title: 'Clientes', 
+      subtitle: 'Gestiona tus clientes',
       stats: [{ value: clientsCount, label: 'Total' }],
       onPress: onNavigateToClients,
     },
     {
-      icon: 'briefcase', title: 'Oportunidades', subtitle: 'Flujo de Oportunidades',
+      icon: 'briefcase', 
+      title: 'Oportunidades', 
+      subtitle: 'Flujo de Oportunidades',
       stats: leadsStats.length > 0
         ? leadsStats.slice(0, 3).map(s => ({ value: s.count, label: s.stageName }))
         : [{ value: leadsCount, label: 'Total' }],
       onPress: onNavigateToLeads,
     },
     {
-      icon: 'check-square', title: 'Tareas', subtitle: 'Visitas y Seguimientos',
+      icon: 'check-square', 
+      title: 'Tareas', 
+      subtitle: 'Visitas y Seguimientos',
       stats: [
         { value: tasksStats.active, label: 'Activas' },
         { value: tasksStats.done,   label: 'Hechas'  },
@@ -133,17 +148,24 @@ export default function HomeScreen({
           userData={userData}
           username={username}
           onLogout={handleLogout}
+          onNavigateToSyncHistory={() => {
+            setMenuVisible(false);
+            onNavigateToSyncHistory?.();
+          }}
         />
 
-        {/* Solo abre sidebar */}
         <ExpandableFAB actions={[{ icon: 'menu', onPress: () => setMenuVisible(true) }]} />
 
         <ScrollView
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh}
-              tintColor="#64c27b" colors={['#64c27b']} />
+            <RefreshControl 
+              refreshing={refreshing} 
+              onRefresh={handleRefresh}
+              tintColor="#64c27b" 
+              colors={['#64c27b']} 
+            />
           }
         >
           <Card style={styles.mainCard}>
