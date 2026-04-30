@@ -18,89 +18,124 @@ class SyncService {
 
   async syncAll() {
     const startTime = Date.now();
-    let entryResult = { created: 0, updated: 0, deleted: 0, failed: 0 };
-    let models = [];
+    const syncEntry = SyncHistory.createSyncAllEntry(startTime);
     
     try {
-      const { projectChanged, oldProject } = await this.syncMasterData();
-
-      const now = new Date();
-      const dayOfMonth = now.getDate();
-      const isLateMonth = dayOfMonth > 25;
-      
-      let projectToKeepId = null;
-
-      if (isLateMonth) {
-        if (projectChanged && oldProject) {
-            console.log(`📅 Cambio post-día 25. Guardando ID proyecto anterior: ${oldProject.display_name}`);
-            await StorageService.setItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID, oldProject.id);
-            projectToKeepId = oldProject.id;
-        } else {
-            const savedPrevId = await StorageService.getItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID);
-            if (savedPrevId) {
-                console.log(`📅 Manteniendo tareas del proyecto anterior (Persistido ID: ${savedPrevId})`);
-                projectToKeepId = savedPrevId;
-            }
-        }
-      } else {
-        await StorageService.removeItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID);
-        if (projectChanged) {
-            console.log('🧹 Cambio de proyecto estándar (<= día 25). Limpiando caché antigua...');
-            await this.clearProjectCacheSafe();
-        }
-      }
-
+      // FASE 1: MASTER DATA (PULL)
       try {
-        await this.syncPendingChanges();
-        console.log('✅ Cambios pendientes enviados');
-      } catch (pendingError) {
-        console.warn('⚠️ Error en cambios pendientes (continuando):', pendingError);
+        const { projectChanged, oldProject } = await this.syncMasterData();
+        const now = new Date();
+        const dayOfMonth = now.getDate();
+        
+        if (dayOfMonth > 25 && projectChanged && oldProject) {
+          await StorageService.setItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID, oldProject.id);
+        } else if (dayOfMonth <= 25 && projectChanged) {
+          await StorageService.removeItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID);
+          await this.clearProjectCacheSafe();
+        }
+        
+        SyncHistory.recordPullPhase(syncEntry, 'MASTER', {
+          'res.country': { count: 1, updated: 1 },
+          'res.country.state': { count: 1, updated: 1 },
+          'res.municipality': { count: 1, updated: 1 },
+        });
+      } catch (e) {
+        syncEntry.pull.errors.push({ phase: 'MASTER', error: e.message });
       }
 
-      const [clientsResult, tasksResult, leadsResult] = await Promise.all([
-        this.syncClients(),
-        this.syncTasks(),
-        this.syncLeads() 
-      ]);
+      // FASE 2: PENDING CHANGES (PUSH)
+      try {
+        const pendingResult = await this.syncPendingChanges(true); // true = skipHistory
+        SyncHistory.recordPushPhase(syncEntry, 'PENDING', pendingResult);
+      } catch (e) {
+        syncEntry.push.errors.push({ phase: 'PENDING', error: e.message });
+      }
 
-      await Comments.syncComments(); 
-      const surveysResult = await this.syncSurveys();
-      await this.syncAttachments();
+      // FASE 3: CLIENTS (PULL)
+      try {
+        const clientsResult = await this.syncClients();
+        const clientCount = clientsResult?.length || 0;
+        SyncHistory.recordPullPhase(syncEntry, 'CLIENTS', {
+          'res.partner': { count: clientCount, created: clientCount }
+        });
+      } catch (e) {
+        syncEntry.pull.errors.push({ phase: 'CLIENTS', error: e.message });
+      }
 
+      // FASE 4: TASKS (PULL)
+      try {
+        const tasksResult = await this.syncTasks();
+        const taskCount = (tasksResult?.macrotasks?.length || 0) + (tasksResult?.subtasks?.length || 0);
+        SyncHistory.recordPullPhase(syncEntry, 'TASKS', {
+          'project.task': { count: taskCount }
+        });
+      } catch (e) {
+        syncEntry.pull.errors.push({ phase: 'TASKS', error: e.message });
+      }
+
+      // FASE 5: LEADS (PULL)
+      try {
+        const leadsResult = await this.syncLeads();
+        const leadCount = leadsResult?.length || 0;
+        SyncHistory.recordPullPhase(syncEntry, 'LEADS', {
+          'crm.lead': { count: leadCount }
+        });
+      } catch (e) {
+        syncEntry.pull.errors.push({ phase: 'LEADS', error: e.message });
+      }
+
+      // FASE 6: COMMENTS (PULL)
+      try {
+        await Comments.syncComments();
+        SyncHistory.recordPullPhase(syncEntry, 'COMMENTS', {
+          'mail.message': { count: 0 }
+        });
+      } catch (e) {
+        syncEntry.pull.errors.push({ phase: 'COMMENTS', error: e.message });
+      }
+
+      // FASE 7: SURVEYS (PULL)
+      try {
+        const surveysResult = await this.syncSurveys();
+        const surveyCount = surveysResult?.length || 0;
+        SyncHistory.recordPullPhase(syncEntry, 'SURVEYS', {
+          'survey.survey': { count: surveyCount }
+        });
+      } catch (e) {
+        syncEntry.pull.errors.push({ phase: 'SURVEYS', error: e.message });
+      }
+
+      // FASE 8: ATTACHMENTS (PULL)
+      try {
+        await this.syncAttachments();
+        SyncHistory.recordPullPhase(syncEntry, 'ATTACHMENTS', {
+          'ir.attachment': { count: 0 }
+        });
+      } catch (e) {
+        syncEntry.pull.errors.push({ phase: 'ATTACHMENTS', error: e.message });
+      }
+
+      // GUARDAR ÚLTIMA SYNC
       try {
         await StorageService.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
       } catch (e) {}
-      
-      await SyncHistory.addSyncHistoryEntry({
-        type: 'syncAll',
-        direction: 'both',
-        status: 'success',
-        duration: Date.now() - startTime,
-        details: entryResult,
-        models,
-      });
+
+      // FINALIZAR Y GUARDAR
+      const finalEntry = SyncHistory.finalizeSyncEntry(syncEntry);
+      await SyncHistory.addSyncHistoryEntry(finalEntry);
       
       return {
-        clients: clientsResult,
-        macrotasks: (tasksResult && tasksResult.macrotasks) ? tasksResult.macrotasks : [],
-        subtasks: (tasksResult && tasksResult.subtasks) ? tasksResult.subtasks : [],
-        surveys: surveysResult || [],
-        leads: leadsResult || [],
-        syncedAt: new Date().toISOString(),
+        macrotasks: [],
+        subtasks: [],
+        surveys: [],
+        leads: [],
+        syncedAt: finalEntry.timestamp,
       };
     } catch (error) {
       console.error('❌ Error en syncAll:', error);
-      
-      await SyncHistory.addSyncHistoryEntry({
-        type: 'syncAll',
-        direction: 'both',
-        status: 'failed',
-        duration: Date.now() - startTime,
-        error: error.message || 'Error desconocido',
-        details: entryResult,
-        models,
-      });
-      
+      finalEntry = SyncHistory.finalizeSyncEntry(syncEntry, 'failed');
+      finalEntry.errors.push({ operation: 'syncAll', error: error.message });
+      await SyncHistory.addSyncHistoryEntry(finalEntry);
       throw error;
     }
   }
@@ -119,42 +154,96 @@ class SyncService {
   async syncSurveyResponses(...args) { return Surveys.syncSurveyResponses(...args); }
 
   // Pendientes
-  async syncPendingChanges() {
+  async syncPendingChanges(skipHistory = false) {
     const startTime = Date.now();
-    let entryResult = { created: 0, updated: 0, deleted: 0, failed: 0 };
+    const operationsData = {};
+    let errors = [];
     
     try {
+      // Encuestas
       const surveyResult = await Surveys.syncSurveyResponses();
+      if (surveyResult) {
+        operationsData['survey.user_input'] = {
+          created: surveyResult.created || 0,
+          updated: surveyResult.updated || 0,
+          failed: surveyResult.failed || 0
+        };
+        if (surveyResult.failed) {
+          errors.push({ model: 'survey.user_input', count: surveyResult.failed });
+        }
+      }
+      
+      // Otros cambios pendientes
       const otherResult = await Pending.syncPendingChangesNonSurvey();
+      if (otherResult) {
+        if (otherResult.tasks) {
+          operationsData['project.task'] = {
+            created: otherResult.tasks.created || 0,
+            updated: otherResult.tasks.updated || 0,
+            failed: otherResult.tasks.failed || 0
+          };
+          if (otherResult.tasks.failed) {
+            errors.push({ model: 'project.task', count: otherResult.tasks.failed });
+          }
+        }
+        if (otherResult.leads) {
+          operationsData['crm.lead'] = {
+            created: otherResult.leads.created || 0,
+            updated: otherResult.leads.updated || 0,
+            failed: otherResult.leads.failed || 0
+          };
+          if (otherResult.leads.failed) {
+            errors.push({ model: 'crm.lead', count: otherResult.leads.failed });
+          }
+        }
+        if (otherResult.clients) {
+          operationsData['res.partner'] = {
+            created: otherResult.clients.created || 0,
+            updated: otherResult.clients.updated || 0,
+            failed: otherResult.clients.failed || 0
+          };
+        }
+      }
       
-      entryResult.created = (surveyResult?.success || 0) + (otherResult?.success || 0);
-      entryResult.failed = (surveyResult?.failed || 0) + (otherResult?.failed || 0);
-      
-      await SyncHistory.addSyncHistoryEntry({
+      const finalEntry = SyncHistory.finalizeSyncEntry({
+        id: Date.now().toString(36),
+        timestamp: new Date().toISOString(),
         type: 'syncPending',
         direction: 'push',
-        status: entryResult.failed > 0 ? 'partial' : 'success',
         duration: Date.now() - startTime,
-        details: entryResult,
-        models: ['survey.user_input', 'project.task', 'crm.lead'],
+        startTime,
+        push: {
+          totalRecords: (operationsData['survey.user_input']?.created || 0) + (operationsData['project.task']?.created || 0) + (operationsData['crm.lead']?.created || 0),
+          totalModels: Object.keys(operationsData).length,
+          models: operationsData,
+          status: errors.length > 0 ? 'partial' : 'success',
+          errors
+        }
       });
       
-      return { surveyResult, otherResult };
+      if (!skipHistory) {
+        await SyncHistory.addSyncHistoryEntry(finalEntry);
+      }
+      
+      return operationsData;
     } catch (error) {
       console.error('❌ Error en syncPendingChanges:', error);
       
-      await SyncHistory.addSyncHistoryEntry({
+      if (!skipHistory) {
+        await SyncHistory.addSyncHistoryEntry({
+        id: Date.now().toString(36),
+        timestamp: new Date().toISOString(),
         type: 'syncPending',
         direction: 'push',
         status: 'failed',
         duration: Date.now() - startTime,
-        error: error.message || 'Error desconocido',
-        details: entryResult,
+        error: error.message,
+        push: { totalRecords: 0, totalModels: 0, models: operationsData, errors: [{ error: error.message }] }
       });
       
       throw error;
     }
-  }
+  }}
   async addPendingChange(model, recordId, updates) { return Pending.addPendingChange(model, recordId, updates); }
   async createReasonWizard(model, wizardData) { return Pending.createReasonWizard(model, wizardData); }
 

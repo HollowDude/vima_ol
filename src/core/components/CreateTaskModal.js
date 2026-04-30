@@ -9,6 +9,12 @@ import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view
 import SelectionModal from './SelectionModal';
 import SimpleDateTimePicker from './SimpleDateTimePicker';
 
+// Format date to Odoo format keeping local timezone
+function formatLocalDate(dateObj) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())} ${pad(dateObj.getHours())}:${pad(dateObj.getMinutes())}:${pad(dateObj.getSeconds())}`;
+}
+
 const PRIORITY_OPTIONS = [
   { id: 'baja', name: 'Baja', color: '#64c27b', icon: 'chevron-down' },
   { id: 'media', name: 'Media', color: '#F59E0B', icon: 'minus' },
@@ -116,6 +122,20 @@ export default function CreateTaskModal({
       return;
     }
 
+    // Validar que la fecha no sea anterior a la actual
+    const now = new Date();
+    now.setSeconds(0, 0);
+    const selectedDateTime = new Date(selectedDate);
+    selectedDateTime.setSeconds(0, 0);
+    
+    if (selectedDateTime < now) {
+      Alert.alert(
+        "Fecha inválida",
+        "No puedes crear una tarea con fecha u hora anterior a la actual"
+      );
+      return;
+    }
+
     let finalProjectId = projectId;
     if (!finalProjectId) {
       const currentProject = await SyncService.getMasterData('current_project');
@@ -139,8 +159,8 @@ export default function CreateTaskModal({
       }
     }
 
-    const pad = (n) => String(n).padStart(2, '0');
-    const dateStr = `${selectedDate.getFullYear()}-${pad(selectedDate.getMonth() + 1)}-${pad(selectedDate.getDate())} ${pad(selectedDate.getHours())}:${pad(selectedDate.getMinutes())}:${pad(selectedDate.getSeconds())}`;
+    // Usar formato local sin conversión a UTC
+    const dateStr = formatLocalDate(selectedDate);
 
     let finalPartnerId = partnerId; 
     if (!finalPartnerId && selectedClient) finalPartnerId = selectedClient.id; 

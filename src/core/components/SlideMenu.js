@@ -226,14 +226,14 @@ export default function SlideMenu({ visible, onClose, userData, username, onLogo
 
             <View style={styles.dividerSmall} />
 
-            <TouchableOpacity
+            {/*<TouchableOpacity
               style={styles.logoutButton}
               onPress={() => { onClose?.(); onNavigateToSyncHistory?.(); }}
               activeOpacity={0.7}
             >
               <Feather name="history" size={18} color="#3B82F6" />
               <Text style={styles.syncHistoryText}>Historial de sincronización</Text>
-            </TouchableOpacity>
+            </TouchableOpacity>*/}
 
             <TouchableOpacity
               style={styles.logoutButton}

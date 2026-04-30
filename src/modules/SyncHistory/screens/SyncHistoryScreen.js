@@ -1,152 +1,294 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert
+  View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, Animated, ScrollView
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import SyncHistoryService from '../../../core/sync/sync.history';
 import useNetwork from '../../../core/hooks/useNetwork';
+import DashboardHeader from '../../../core/components/DashboardHeader';
+import SlideMenu from '../../../core/components/SlideMenu';
+import Card from '../../../core/components/Card';
 
 const STATUS_COLORS = {
   success: '#10B981',
   partial: '#F59E0B',
   failed: '#EF4444',
+  syncing: '#3B82F6',
 };
 
-const TYPE_ICONS = {
-  syncAll: 'refresh-cw',
-  syncPending: 'upload-cloud',
-  manual: 'edit-3',
-  survey: 'file-text',
-  task: 'check-square',
-  lead: 'briefcase',
-  client: 'users',
+const DIRECTION_COLORS = {
+  pull: '#64c27b',   // Verde: descargas
+  push: '#3B82F6',   // Azul: subidas
+  both: '#8B5CF6',   // Púrpura: ambas
 };
 
-function formatDate(isoString) {
-  const date = new Date(isoString);
-  return date.toLocaleDateString('es-ES', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
-}
+const MODEL_LABELS = {
+  'res.partner': 'Clientes',
+  'project.task': 'Tareas',
+  'crm.lead': 'Oportunidades',
+  'mail.message': 'Comentarios',
+  'survey.survey': 'Encuestas',
+  'survey.user_input': 'Respuestas',
+  'ir.attachment': 'Adjuntos',
+  'res.country': 'Países',
+  'res.country.state': 'Estados',
+  'res.municipality': 'Municipios',
+  'client.type': 'Tipos de cliente',
+  'project.task.tags': 'Etiquetas',
+  'crm.stage': 'Etapas CRM',
+};
 
-function formatTime(isoString) {
-  const date = new Date(isoString);
-  return date.toLocaleTimeString('es-ES', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
+// ──────────────────────────────────────────────────────────────────────────────
+// Componentes pequeños
+// ──────────────────────────────────────────────────────────────────────────────
 
-function formatDuration(ms) {
-  if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return `${minutes}m ${remainingSeconds}s`;
-}
-
-function getStatusLabel(status) {
-  switch (status) {
-    case 'success': return 'Éxito';
-    case 'partial': return 'Parcial';
-    case 'failed': return 'Fallido';
-    default: return status;
-  }
-}
-
-function getTypeLabel(type) {
-  switch (type) {
-    case 'syncAll': return 'Sincronización completa';
-    case 'syncPending': return 'Cambios pendientes';
-    case 'manual': return 'Sincronización manual';
-    case 'survey': return 'Encuesta';
-    case 'task': return 'Tarea';
-    case 'lead': return 'Oportunidad';
-    case 'client': return 'Cliente';
-    default: return type;
-  }
-}
-
-function SyncHistoryItem({ item }) {
-  const statusColor = STATUS_COLORS[item.status] || STATUS_COLORS.partial;
-  const iconName = TYPE_ICONS[item.type] || 'activity';
+function DirectionBadge({ direction }) {
+  const color = DIRECTION_COLORS[direction] || '#9CA3AF';
+  const label = direction === 'pull' ? '⬇ PULL' : direction === 'push' ? '⬆ PUSH' : '↔ AMBOS';
   
   return (
-    <View style={styles.itemCard}>
-      <View style={styles.itemHeader}>
-        <View style={[styles.statusIndicator, { backgroundColor: statusColor }]} />
-        <Feather name={iconName} size={18} color={statusColor} />
-        <View style={styles.itemInfo}>
-          <Text style={styles.itemType} numberOfLines={1}>
-            {getTypeLabel(item.type)}
-          </Text>
-          <Text style={styles.itemDate} numberOfLines={1}>
-            {formatDate(item.timestamp)} • {formatTime(item.timestamp)}
-          </Text>
-        </View>
-        <View style={[styles.statusBadge, { backgroundColor: statusColor + '20' }]}>
-          <Text style={[styles.statusBadgeText, { color: statusColor }]}>
-            {getStatusLabel(item.status)}
-          </Text>
-        </View>
+    <View style={[styles.directionBadge, { backgroundColor: color + '20', borderColor: color }]}>
+      <Text style={[styles.directionBadgeText, { color }]}>{label}</Text>
+    </View>
+  );
+}
+
+function StatusBadge({ status }) {
+  const color = STATUS_COLORS[status] || STATUS_COLORS.partial;
+  const label = status === 'success' ? '✓ Éxito' 
+              : status === 'partial' ? '⚠ Parcial'
+              : status === 'failed' ? '✕ Fallido'
+              : status;
+  
+  return (
+    <View style={[styles.statusBadge, { backgroundColor: color + '20' }]}>
+      <View style={[styles.statusDot, { backgroundColor: color }]} />
+      <Text style={[styles.statusBadgeText, { color }]}>{label}</Text>
+    </View>
+  );
+}
+
+function ModelDetailRow({ model, count, icon = 'circle' }) {
+  const label = MODEL_LABELS[model] || model.split('.').pop();
+  
+  return (
+    <View style={styles.modelDetailRow}>
+      <Feather name={icon} size={12} color="#9CA3AF" />
+      <Text style={styles.modelLabel}>{label}</Text>
+      <View style={styles.countBadge}>
+        <Text style={styles.countText}>{count}</Text>
       </View>
-      
-      {item.duration !== undefined && (
-        <View style={styles.durationRow}>
-          <Feather name="clock" size={12} color="#9CA3AF" />
-          <Text style={styles.durationText}>Duración: {formatDuration(item.duration)}</Text>
+    </View>
+  );
+}
+
+function CRUDStats({ stats }) {
+  if (!stats || (stats.created === 0 && stats.updated === 0 && stats.deleted === 0 && stats.errors === 0)) {
+    return null;
+  }
+
+  return (
+    <View style={styles.crudStatsContainer}>
+      {stats.created > 0 && (
+        <View style={[styles.crudBadge, { backgroundColor: '#ECFDF5', borderColor: '#10B981' }]}>
+          <Text style={[styles.crudText, { color: '#10B981' }]}>+{stats.created}</Text>
         </View>
       )}
-      
-      {item.details && (
-        <View style={styles.detailsRow}>
-          {item.details.created > 0 && (
-            <View style={styles.detailBadge}>
-              <Text style={styles.detailText}>+{item.details.created}</Text>
+      {stats.updated > 0 && (
+        <View style={[styles.crudBadge, { backgroundColor: '#EEF2FF', borderColor: '#3B82F6' }]}>
+          <Text style={[styles.crudText, { color: '#3B82F6' }]}>◻{stats.updated}</Text>
+        </View>
+      )}
+      {stats.deleted > 0 && (
+        <View style={[styles.crudBadge, { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' }]}>
+          <Text style={[styles.crudText, { color: '#F59E0B' }]}>-{stats.deleted}</Text>
+        </View>
+      )}
+      {stats.errors > 0 && (
+        <View style={[styles.crudBadge, { backgroundColor: '#FEF2F2', borderColor: '#EF4444' }]}>
+          <Text style={[styles.crudText, { color: '#EF4444' }]}>✕{stats.errors}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Item expandible de Sync
+// ──────────────────────────────────────────────────────────────────────────────
+
+function SyncHistoryItem({ item }) {
+  const [expanded, setExpanded] = useState(false);
+  
+  const formatDate = (isoString) => {
+    const date = new Date(isoString);
+    return date.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+
+  const formatTime = (isoString) => {
+    const date = new Date(isoString);
+    return date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const formatDuration = (ms) => {
+    if (ms < 1000) return `${ms}ms`;
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}m ${remainingSeconds}s`;
+  };
+
+  return (
+    <View style={styles.itemContainer}>
+      {/* Header */}
+      <TouchableOpacity
+        style={styles.itemHeader}
+        onPress={() => setExpanded(!expanded)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.itemHeaderLeft}>
+          <View style={[styles.itemStatusDot, { backgroundColor: STATUS_COLORS[item.status] }]} />
+          <View style={styles.itemMeta}>
+            <Text style={styles.itemType} numberOfLines={1}>
+              {item.type === 'syncAll' ? 'Sincronización Completa'
+              : item.type === 'syncPending' ? 'Cambios Pendientes'
+              : item.type}
+            </Text>
+            <Text style={styles.itemDateTime} numberOfLines={1}>
+              {formatDate(item.timestamp)} • {formatTime(item.timestamp)}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.itemHeaderRight}>
+          <StatusBadge status={item.status} />
+          <Feather 
+            name={expanded ? 'chevron-up' : 'chevron-down'} 
+            size={20} 
+            color="#9CA3AF" 
+            style={styles.expandIcon}
+          />
+        </View>
+      </TouchableOpacity>
+
+      {/* Detalles expandidos */}
+      {expanded && (
+        <View style={styles.itemDetails}>
+          {/* Duración */}
+          {item.duration !== undefined && (
+            <View style={styles.detailRow}>
+              <Feather name="clock" size={14} color="#64c27b" />
+              <Text style={styles.detailLabel}>Duración:</Text>
+              <Text style={styles.detailValue}>{formatDuration(item.duration)}</Text>
             </View>
           )}
-          {item.details.updated > 0 && (
-            <View style={styles.detailBadge}>
-              <Text style={styles.detailText}>◻{item.details.updated}</Text>
+
+          {/* Direction */}
+          {item.direction && (
+            <View style={styles.detailRow}>
+              <Feather name="repeat" size={14} color="#3B82F6" />
+              <Text style={styles.detailLabel}>Dirección:</Text>
+              <DirectionBadge direction={item.direction} />
             </View>
           )}
-          {item.details.deleted > 0 && (
-            <View style={styles.detailBadge}>
-              <Text style={styles.detailText}>-{item.details.deleted}</Text>
+
+          {/* PULL Details */}
+          {item.pull && (
+            <View style={styles.phaseSection}>
+              <View style={styles.phaseHeader}>
+                <Feather name="download" size={14} color="#64c27b" />
+                <Text style={styles.phaseTitle}>PULL (Descargas)</Text>
+                <View style={styles.phaseStats}>
+                  <Text style={styles.phaseStatsText}>
+                    {item.pull.totalRecords || 0} registros • {item.pull.totalModels || 0} modelos
+                  </Text>
+                </View>
+              </View>
+
+              {item.pull.models && Object.keys(item.pull.models).length > 0 ? (
+                Object.entries(item.pull.models).map(([model, data]) => (
+                  <View key={model} style={styles.modelBlock}>
+                    <ModelDetailRow 
+                      model={model} 
+                      count={data.count || 0}
+                      icon={model === 'res.partner' ? 'users' 
+                          : model === 'project.task' ? 'check-square'
+                          : model === 'crm.lead' ? 'briefcase'
+                          : model === 'mail.message' ? 'message-circle'
+                          : 'circle'}
+                    />
+                    {data.created > 0 || data.updated > 0 ? (
+                      <CRUDStats stats={data} />
+                    ) : (
+                      <Text style={styles.noDataText}>Sin nuevos datos</Text>
+                    )}
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.noDataText}>No se descargaron datos</Text>
+              )}
+
+              {item.pull.errors && item.pull.errors.length > 0 && (
+                <View style={styles.errorSection}>
+                  <Text style={styles.errorLabel}>
+                    ⚠ {item.pull.errors.length} error(es) en PULL
+                  </Text>
+                </View>
+              )}
             </View>
           )}
-          {item.details.failed > 0 && (
-            <View style={[styles.detailBadge, styles.detailBadgeFailed]}>
-              <Text style={[styles.detailText, styles.detailTextFailed]}>
-                ✕{item.details.failed}
+
+          {/* PUSH Details */}
+          {item.push && (
+            <View style={styles.phaseSection}>
+              <View style={styles.phaseHeader}>
+                <Feather name="upload" size={14} color="#3B82F6" />
+                <Text style={styles.phaseTitle}>PUSH (Subidas)</Text>
+                <View style={styles.phaseStats}>
+                  <Text style={styles.phaseStatsText}>
+                    {item.push.totalRecords || 0} registros • {item.push.totalModels || 0} modelos
+                  </Text>
+                </View>
+              </View>
+
+              {item.push.models && Object.keys(item.push.models).length > 0 ? (
+                Object.entries(item.push.models).map(([model, data]) => (
+                  <View key={model} style={styles.modelBlock}>
+                    <ModelDetailRow 
+                      model={model} 
+                      count={(data.created || 0) + (data.updated || 0) + (data.deleted || 0)}
+                      icon={model === 'res.partner' ? 'users' 
+                          : model === 'project.task' ? 'check-square'
+                          : model === 'crm.lead' ? 'briefcase'
+                          : 'circle'}
+                    />
+                    <CRUDStats stats={data} />
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.noDataText}>No se subieron datos</Text>
+              )}
+
+              {item.push.errors && item.push.errors.length > 0 && (
+                <View style={styles.errorSection}>
+                  <Text style={styles.errorLabel}>
+                    ⚠ {item.push.errors.length} error(es) en PUSH
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* Error general */}
+          {item.error && (
+            <View style={[styles.errorSection, { backgroundColor: '#FEF2F2', borderColor: '#EF4444' }]}>
+              <Feather name="alert-circle" size={14} color="#EF4444" />
+              <Text style={[styles.errorLabel, { color: '#EF4444' }]}>
+                Error: {item.error}
               </Text>
             </View>
-          )}
-        </View>
-      )}
-      
-      {item.error && (
-        <View style={styles.errorRow}>
-          <Feather name="alert-circle" size={12} color="#EF4444" />
-          <Text style={styles.errorText} numberOfLines={2}>{item.error}</Text>
-        </View>
-      )}
-      
-      {item.models && item.models.length > 0 && (
-        <View style={styles.modelsRow}>
-          {item.models.slice(0, 3).map((model, idx) => (
-            <View key={idx} style={styles.modelChip}>
-              <Text style={styles.modelText} numberOfLines={1}>
-                {model.split('.')[1] || model}
-              </Text>
-            </View>
-          ))}
-          {item.models.length > 3 && (
-            <Text style={styles.moreModelsText}>+{item.models.length - 3}</Text>
           )}
         </View>
       )}
@@ -154,12 +296,16 @@ function SyncHistoryItem({ item }) {
   );
 }
 
-function SyncHistoryScreenContent({ onBack, onLogout }) {
-  const insets = useSafeAreaInsets();
+// ──────────────────────────────────────────────────────────────────────────────
+// Pantalla principal
+// ──────────────────────────────────────────────────────────────────────────────
+
+export default function SyncHistoryScreen({ userData, username, onBack, onLogout, onNavigateToSyncHistory }) {
   const { isOnline } = useNetwork();
   const [history, setHistory] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState('all');
+  const [menuVisible, setMenuVisible] = useState(false);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -203,12 +349,17 @@ function SyncHistoryScreenContent({ onBack, onLogout }) {
     return item.status === filter;
   });
 
-  const renderFilterButton = (filterValue, label) => (
+  const renderFilterButton = (filterValue, icon, label) => (
     <TouchableOpacity
       style={[styles.filterButton, filter === filterValue && styles.filterButtonActive]}
       onPress={() => setFilter(filterValue)}
       activeOpacity={0.7}
     >
+      <Feather 
+        name={icon} 
+        size={14} 
+        color={filter === filterValue ? '#fff' : '#9CA3AF'} 
+      />
       <Text style={[styles.filterButtonText, filter === filterValue && styles.filterButtonTextActive]}>
         {label}
       </Text>
@@ -216,33 +367,22 @@ function SyncHistoryScreenContent({ onBack, onLogout }) {
   );
 
   return (
-    <View style={[styles.screenContainer, { paddingTop: insets.top }]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerTop}>
-          <TouchableOpacity onPress={onBack} style={styles.backButton} activeOpacity={0.7}>
-            <Feather name="arrow-left" size={24} color="#374151" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Historial de Sincronización</Text>
-          <View style={styles.headerRight}>
-            <View style={[styles.onlineIndicator, { backgroundColor: isOnline ? '#10B981' : '#9CA3AF' }]} />
-          </View>
-        </View>
-        
-        <View style={styles.filterContainer}>
-          {renderFilterButton('all', 'Todas')}
-          {renderFilterButton('success', 'Éxitos')}
-          {renderFilterButton('partial', 'Parciales')}
-          {renderFilterButton('failed', 'Fallidas')}
-        </View>
-      </View>
+    <View style={styles.container}>
+      <SlideMenu
+        visible={menuVisible}
+        onClose={() => setMenuVisible(false)}
+        userData={userData}
+        username={username}
+        onLogout={onLogout}
+        onNavigateToSyncHistory={() => {
+          setMenuVisible(false);
+          onNavigateToSyncHistory?.();
+        }}
+      />
 
-      {/* Lista */}
-      <FlatList
-        data={filteredHistory}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <SyncHistoryItem item={item} />}
-        contentContainerStyle={styles.listContent}
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl 
             refreshing={refreshing} 
@@ -251,245 +391,398 @@ function SyncHistoryScreenContent({ onBack, onLogout }) {
             tintColor="#64c27b"
           />
         }
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Feather name="inbox" size={48} color="#9CA3AF" />
-            <Text style={styles.emptyText}>No hay historial</Text>
-            <Text style={styles.emptySubtext}>
-              Las sincronizaciones aparecerán aquí
-            </Text>
-          </View>
-        }
-        scrollIndicatorInsets={{ right: 1 }}
-      />
-
-      {/* Botón limpiar */}
-      <TouchableOpacity 
-        style={styles.clearButton} 
-        onPress={handleClearHistory}
-        activeOpacity={0.7}
       >
-        <Feather name="trash-2" size={16} color="#EF4444" />
-        <Text style={styles.clearButtonText}>Limpiar historial</Text>
-      </TouchableOpacity>
+        <Card style={styles.mainCard}>
+          <DashboardHeader userName={username || 'Usuario'} isOnline={isOnline} />
+
+          <View style={styles.cardContent}>
+            {/* Título */}
+            <View style={styles.titleSection}>
+              <View style={styles.titleTop}>
+                <TouchableOpacity 
+                  onPress={onBack}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Feather name="arrow-left" size={24} color="#0B1B2A" />
+                </TouchableOpacity>
+                <Text style={styles.title}>Historial de Sincronización</Text>
+                <TouchableOpacity 
+                  onPress={() => setMenuVisible(true)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Feather name="menu" size={24} color="#0B1B2A" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Filtros */}
+              <View style={styles.filterContainer}>
+                {renderFilterButton('all', 'inbox', 'Todas')}
+                {renderFilterButton('success', 'check-circle', 'Éxitos')}
+                {renderFilterButton('partial', 'alert-circle', 'Parciales')}
+                {renderFilterButton('failed', 'x-circle', 'Fallidas')}
+              </View>
+            </View>
+
+            {/* Lista de items */}
+            {filteredHistory.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Feather name="inbox" size={48} color="#D1D5DB" />
+                <Text style={styles.emptyText}>No hay historial</Text>
+                <Text style={styles.emptySubtext}>Las sincronizaciones aparecerán aquí</Text>
+              </View>
+            ) : (
+              <View style={styles.itemsList}>
+                {filteredHistory.map((item, idx) => (
+                  <SyncHistoryItem key={item.id || idx} item={item} />
+                ))}
+              </View>
+            )}
+          </View>
+        </Card>
+
+        {/* Botón limpiar */}
+        {history.length > 0 && (
+          <View style={styles.bottomButtonContainer}>
+            <TouchableOpacity 
+              style={styles.clearButton} 
+              onPress={handleClearHistory}
+              activeOpacity={0.7}
+            >
+              <Feather name="trash-2" size={16} color="#EF4444" />
+              <Text style={styles.clearButtonText}>Limpiar historial</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 }
 
-export default function SyncHistoryScreen({ onBack, onLogout }) {
-  return (
-    <SafeAreaProvider>
-      <SyncHistoryScreenContent onBack={onBack} onLogout={onLogout} />
-    </SafeAreaProvider>
-  );
-}
+// ──────────────────────────────────────────────────────────────────────────────
+// Estilos
+// ──────────────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  screenContainer: {
+  container: {
     flex: 1,
     backgroundColor: '#f5f0ebff',
   },
-  header: {
-    backgroundColor: '#fff',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
+  scrollView: {
+    flex: 1,
   },
-  headerTop: {
+  scrollContent: {
+    padding: 16,
+    paddingTop: 80,
+    paddingBottom: 140,
+  },
+  mainCard: {
+    marginBottom: 16,
+  },
+  cardContent: {
+    padding: 16,
+  },
+
+  // Título
+  titleSection: {
+    marginBottom: 16,
+  },
+  titleTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    justifyContent: 'space-between',
+    marginBottom: 14,
   },
-  backButton: {
-    padding: 8,
-    marginLeft: -8,
-  },
-  headerTitle: {
+  title: {
     flex: 1,
     fontSize: 18,
     fontWeight: '700',
-    color: '#1F2937',
-    marginLeft: 8,
+    color: '#0B1B2A',
+    marginHorizontal: 12,
+    textAlign: 'center',
   },
-  headerRight: {
-    padding: 4,
-  },
-  onlineIndicator: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
+
+  // Filtros
   filterContainer: {
     flexDirection: 'row',
     gap: 8,
+    flexWrap: 'wrap',
   },
   filterButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#F3F4F6',
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#f3f4f6',
   },
   filterButtonActive: {
     backgroundColor: '#64c27b',
   },
   filterButtonText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600',
     color: '#6B7280',
   },
   filterButtonTextActive: {
     color: '#fff',
   },
-  listContent: {
-    padding: 12,
-    paddingBottom: 20,
+
+  // Items List
+  itemsList: {
+    gap: 10,
+    marginTop: 16,
   },
-  itemCard: {
+  itemContainer: {
     backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
+    borderRadius: 10,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   itemHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 14,
   },
-  statusIndicator: {
-    width: 4,
-    height: 32,
-    borderRadius: 2,
-    marginRight: 10,
-  },
-  itemInfo: {
+  itemHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
     flex: 1,
-    marginLeft: 8,
+    gap: 10,
+  },
+  itemStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  itemMeta: {
+    flex: 1,
   },
   itemType: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#1F2937',
+    fontWeight: '700',
+    color: '#0B1B2A',
+    marginBottom: 2,
   },
-  itemDate: {
+  itemDateTime: {
     fontSize: 12,
     color: '#9CA3AF',
-    marginTop: 2,
   },
-  statusBadge: {
+  itemHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  expandIcon: {
+    marginLeft: 4,
+  },
+
+  // Badges
+  directionBadge: {
     paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  directionBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   statusBadgeText: {
     fontSize: 11,
     fontWeight: '700',
   },
-  durationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 10,
-    paddingTop: 10,
+
+  // Detalles expandidos
+  itemDetails: {
+    paddingHorizontal: 14,
+    paddingBottom: 14,
+    paddingTop: 0,
     borderTopWidth: 1,
     borderTopColor: '#F3F4F6',
+    gap: 12,
   },
-  durationText: {
-    fontSize: 12,
-    color: '#9CA3AF',
-  },
-  detailsRow: {
-    flexDirection: 'row',
-    marginTop: 10,
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  detailBadge: {
-    backgroundColor: '#ECFDF5',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  detailBadgeFailed: {
-    backgroundColor: '#FEF2F2',
-  },
-  detailText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#10B981',
-  },
-  detailTextFailed: {
-    color: '#EF4444',
-  },
-  errorRow: {
+  detailRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 10,
-    padding: 10,
-    backgroundColor: '#FEF2F2',
-    borderRadius: 8,
+    gap: 8,
   },
-  errorText: {
+  detailLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6B7280',
+    minWidth: 80,
+  },
+  detailValue: {
     flex: 1,
     fontSize: 12,
-    color: '#EF4444',
+    fontWeight: '700',
+    color: '#0B1B2A',
   },
-  modelsRow: {
+
+  // Fases (PULL/PUSH)
+  phaseSection: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  phaseHeader: {
     flexDirection: 'row',
-    marginTop: 10,
-    flexWrap: 'wrap',
-    gap: 6,
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
   },
-  modelChip: {
-    backgroundColor: '#F3F4F6',
+  phaseTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0B1B2A',
+    flex: 1,
+  },
+  phaseStats: {
+    backgroundColor: '#fff',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
-    maxWidth: '50%',
   },
-  modelText: {
+  phaseStatsText: {
     fontSize: 11,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
-  moreModelsText: {
-    fontSize: 11,
+    fontWeight: '600',
     color: '#9CA3AF',
-    alignSelf: 'center',
   },
-  emptyContainer: {
+
+  // Modelos
+  modelBlock: {
+    backgroundColor: '#fff',
+    padding: 10,
+    borderRadius: 6,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
+  },
+  modelDetailRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  modelLabel: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  countBadge: {
+    backgroundColor: '#FEF3C7',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    minWidth: 28,
+    alignItems: 'center',
+  },
+  countText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#D97706',
+  },
+
+  // CRUD Stats
+  crudStatsContainer: {
+    flexDirection: 'row',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  crudBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 5,
+    borderWidth: 1,
+  },
+  crudText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  noDataText: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    fontStyle: 'italic',
+    marginTop: 4,
+  },
+
+  // Errores
+  errorSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#EF4444',
+  },
+  errorLabel: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#EF4444',
+  },
+
+  // Empty
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingVertical: 60,
   },
   emptyText: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#6B7280',
-    marginTop: 12,
+    fontWeight: '700',
+    color: '#9CA3AF',
+    marginTop: 16,
   },
   emptySubtext: {
     fontSize: 13,
-    color: '#9CA3AF',
+    color: '#D1D5DB',
     marginTop: 4,
+  },
+
+  // Botón inferior
+  bottomButtonContainer: {
+    paddingHorizontal: 16,
+    paddingBottom: 20,
   },
   clearButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    gap: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
+    gap: 10,
+    paddingVertical: 12,
+    borderRadius: 10,
     backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: '#EF4444',
   },
   clearButtonText: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#EF4444',
   },
 });
