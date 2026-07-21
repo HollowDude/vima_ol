@@ -92,12 +92,14 @@ class OdooService {
   }
 
   /**
-   * Llamada genérica a Odoo con JSON-RPC
-   */
+* Llamada genérica a Odoo con JSON-RPC
+    */
   async call(model, method, args = [], kwargs = {}) {
     if (!this.uid || !this.password) {
       throw new Error('No autenticado. Debe hacer login primero.');
     }
+
+    const startedAt = Date.now();
 
     try {
       console.log(" Llamando a Odoo:", { model, method, args, kwargs });
@@ -141,11 +143,29 @@ class OdooService {
       console.log(" Respuesta de llamada:", data);
 
       if (data.error) {
+        const duration = Date.now() - startedAt;
+        this.lastCallMeta = { model, method, duration, ok: false, recordCount: 0 };
         throw new Error(data.error.data?.message || 'Error en llamada a Odoo');
       }
 
+      const duration = Date.now() - startedAt;
+      let recordCount = 0;
+      if (Array.isArray(data.result)) {
+        recordCount = data.result.length;
+      } else if (method === 'create') {
+        recordCount = 1;
+      } else if (method === 'write' || method === 'unlink') {
+        recordCount = Array.isArray(args[0]) ? args[0].length : 0;
+      }
+
+      this.lastCallMeta = { model, method, duration, ok: true, recordCount };
+
       return data.result;
     } catch (error) {
+      const duration = Date.now() - startedAt;
+      if (!this.lastCallMeta || this.lastCallMeta.duration < duration) {
+        this.lastCallMeta = { model, method, duration, ok: false, recordCount: 0, error: error.message };
+      }
       console.error(" Error en llamada:", error);
       throw error;
     }

@@ -69,8 +69,9 @@ function StatusBadge({ status }) {
   );
 }
 
-function ModelDetailRow({ model, count, icon = 'circle' }) {
+function ModelDetailRow({ model, count, icon = 'circle', duration }) {
   const label = MODEL_LABELS[model] || model.split('.').pop();
+  const durStr = formatDuration(duration);
   
   return (
     <View style={styles.modelDetailRow}>
@@ -79,8 +80,21 @@ function ModelDetailRow({ model, count, icon = 'circle' }) {
       <View style={styles.countBadge}>
         <Text style={styles.countText}>{count}</Text>
       </View>
+      {durStr && (
+        <Text style={styles.durationText}>{durStr}</Text>
+      )}
     </View>
   );
+}
+
+function formatDuration(ms) {
+  if (!ms && ms !== 0) return null;
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}m ${remainingSeconds}s`;
 }
 
 function CRUDStats({ stats }) {
@@ -129,15 +143,6 @@ function SyncHistoryItem({ item }) {
   const formatTime = (isoString) => {
     const date = new Date(isoString);
     return date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-  };
-
-  const formatDuration = (ms) => {
-    if (ms < 1000) return `${ms}ms`;
-    const seconds = Math.floor(ms / 1000);
-    if (seconds < 60) return `${seconds}s`;
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-    return `${minutes}m ${remainingSeconds}s`;
   };
 
   return (
@@ -213,6 +218,7 @@ function SyncHistoryItem({ item }) {
                     <ModelDetailRow 
                       model={model} 
                       count={data.count || 0}
+                      duration={data.duration}
                       icon={model === 'res.partner' ? 'users' 
                           : model === 'project.task' ? 'check-square'
                           : model === 'crm.lead' ? 'briefcase'
@@ -259,6 +265,7 @@ function SyncHistoryItem({ item }) {
                     <ModelDetailRow 
                       model={model} 
                       count={(data.created || 0) + (data.updated || 0) + (data.deleted || 0)}
+                      duration={data.duration}
                       icon={model === 'res.partner' ? 'users' 
                           : model === 'project.task' ? 'check-square'
                           : model === 'crm.lead' ? 'briefcase'
@@ -690,6 +697,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#374151',
+  },
+  durationText: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#9CA3AF',
+    marginLeft: 6,
   },
   countBadge: {
     backgroundColor: '#FEF3C7',

@@ -5,14 +5,14 @@ import {
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import SyncService from '../sync/sync.service';
+import useNetwork from '../hooks/useNetwork';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import SelectionModal from './SelectionModal';
 import SimpleDateTimePicker from './SimpleDateTimePicker';
 
-// Format date to Odoo format keeping local timezone
+// Format date to Odoo format - usa toISOString como en el resto de la app
 function formatLocalDate(dateObj) {
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())} ${pad(dateObj.getHours())}:${pad(dateObj.getMinutes())}:${pad(dateObj.getSeconds())}`;
+  return dateObj.toISOString().replace('T', ' ').split('.')[0];
 }
 
 const PRIORITY_OPTIONS = [
@@ -52,6 +52,7 @@ export default function CreateTaskModal({
   onCreated, 
   projectFinishDate
 }) {
+  const { isOnline } = useNetwork();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   
@@ -163,10 +164,26 @@ export default function CreateTaskModal({
     const dateStr = formatLocalDate(selectedDate);
 
     let finalPartnerId = partnerId; 
-    if (!finalPartnerId && selectedClient) finalPartnerId = selectedClient.id; 
+    let clientName = selectedClient?.name || '';
+    
+    if (!finalPartnerId && selectedClient) {
+      finalPartnerId = selectedClient.id; 
+      clientName = selectedClient.name || '';
+    }
+    
+    // Si no hay cliente seleccionado pero viene de props, buscar el nombre
+    if (!finalPartnerId && partnerId) {
+      finalPartnerId = partnerId;
+      // Buscar nombre en la lista de clientes disponibles
+      const foundClient = clients.find(c => c.id === partnerId);
+      clientName = foundClient?.name || '';
+    }
+    
     if (!finalPartnerId) {
-      const partner_id = await SyncService.getCurrentUser();
-      finalPartnerId = partner_id[0].partner_id[0];
+      // Cliente actual (usuario logueado)
+      const currentUserData = await SyncService.getCurrentUser();
+      finalPartnerId = currentUserData[0].partner_id[0];
+      clientName = ''; // No mostraremos nombre para el propio usuario
     }
 
     let userIdValue;
@@ -191,7 +208,7 @@ export default function CreateTaskModal({
       display_name: title,
       description: description.trim(),
       project_id: finalProjectId,
-      partner_id: finalPartnerId,
+      partner_id: [finalPartnerId, clientName],
       user_ids: [[6, 0, [userIdValue]]],
       date_deadline: dateStr,
       priority_level: selectedPriority,
@@ -202,7 +219,19 @@ export default function CreateTaskModal({
 
     try {
       const createdTask = await SyncService.createTaskLocally(newTaskData);
-      Alert.alert("✓ Tarea creada", "Se ha programado correctamente");
+      
+      // Si hay conexión, intentar sincronizar inmediatamente
+      if (isOnline) {
+        try {
+          await SyncService.syncPendingChanges();
+          Alert.alert("✓ Tarea creada y sincronizada", "Se ha subido al servidor");
+        } catch (syncError) {
+          Alert.alert("✓ Tarea creada", "Se sincronizará cuando haya conexión");
+        }
+      } else {
+        Alert.alert("✓ Tarea creada", "Se subirá cuando haya conexión");
+      }
+      
       onCreated(createdTask.id);
     } catch (e) {
       Alert.alert("Error", "No se pudo guardar la tarea");

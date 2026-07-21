@@ -50,13 +50,18 @@ export async function createReasonWizard(model, wizardData = {}) {
 export async function syncPendingChangesNonSurvey() {
   try {
     const pending = await StorageService.getItem(STORAGE_KEYS.PENDING_CHANGES) || [];
-    if (pending.length === 0) return { success: 0, failed: 0 };
+    if (pending.length === 0) return { success: 0, failed: 0, byModel: {} };
 
     
     const allQuestions = await StorageService.getItem(STORAGE_KEYS.SURVEY_QUESTIONS) || [];
 
     let success = 0;
     let failed = 0;
+    const byModel = {};
+    function bump(model, key) {
+      byModel[model] = byModel[model] || { created: 0, updated: 0, deleted: 0, failed: 0 };
+      byModel[model][key]++;
+    }
     const remainingPending = [];
     
     const taskIdMapping = {};
@@ -85,12 +90,14 @@ export async function syncPendingChangesNonSurvey() {
           taskIdMapping[tempId] = realId;
           
           success++;
+          bump(change.model, 'created');
         }
       } catch (err) {
         if (typeof change.model === 'string' && change.model === 'project.task' && change.updates._is_creation) {
           remainingPending.push(change);
         }
         failed++;
+        bump(change.model, 'failed');
       }
     }
 
@@ -209,6 +216,7 @@ export async function syncPendingChangesNonSurvey() {
           }
 
           success++;
+          bump(change.model, 'updated');
           continue; 
         }
       } catch (err) {
@@ -217,6 +225,7 @@ export async function syncPendingChangesNonSurvey() {
           remainingPending.push(change);
         }
         failed++;
+        bump(change.model, 'failed');
       }
     }
 
@@ -236,6 +245,7 @@ export async function syncPendingChangesNonSurvey() {
           await OdooService.write(change.model, [change.recordId], taskUpdates);
           console.log(`✅ Tarea completada: ${change.model} #${change.recordId}`);
           success++;
+          bump(change.model, 'updated');
           continue;
         }
       } catch (err) {
@@ -244,6 +254,7 @@ export async function syncPendingChangesNonSurvey() {
           remainingPending.push(change);
         }
         failed++;
+        bump(change.model, 'failed');
       }
     }
 
@@ -280,6 +291,7 @@ export async function syncPendingChangesNonSurvey() {
           );
 
           success++;
+          bump(change.model, 'updated');
           continue;
         }
 
@@ -289,6 +301,7 @@ export async function syncPendingChangesNonSurvey() {
           await OdooService.unlink(change.model, [Number(change.recordId)]);
           console.log(` Registro eliminado en Odoo: ${change.model} #${change.recordId}`);
           success++;
+          bump(change.model, 'deleted');
           continue;
         }
 
@@ -321,6 +334,7 @@ export async function syncPendingChangesNonSurvey() {
           await OdooService.write('crm.lead', [change.recordId], sanitized);
           
           success++;
+          bump(change.model, 'updated');
           continue;
         }
 
@@ -351,6 +365,7 @@ export async function syncPendingChangesNonSurvey() {
           const sanitized = sanitizeForOdoo(creationData);
           const realId = await OdooService.create(change.model, sanitized);
           success++;
+          bump(change.model, 'created');
           continue;
         }
 
@@ -364,6 +379,7 @@ export async function syncPendingChangesNonSurvey() {
 
           await OdooService.create(change.model, sanitizedWizard);
           success++;
+          bump(change.model, 'created');
           continue;
         }
 
@@ -379,6 +395,7 @@ export async function syncPendingChangesNonSurvey() {
         const sanitized = sanitizeForOdoo(updateData);
         await OdooService.write(change.model, [change.recordId], sanitized);
         success++;
+        bump(change.model, 'updated');
 
       } catch (err) {
         console.error(`❌ Error procesando pendiente (${JSON.stringify(change.model)}):`, err);
@@ -386,6 +403,7 @@ export async function syncPendingChangesNonSurvey() {
           remainingPending.push(change);
         }
         failed++;
+        bump(change.model, 'failed');
       }
     }
 
@@ -425,10 +443,10 @@ export async function syncPendingChangesNonSurvey() {
       }
     }
     
-    return { success, failed };
+    return { success, failed, byModel };
   } catch (error) {
     console.error('❌ Error general en syncPendingChanges:', error);
-    return { success: 0, failed: 0 };
+    return { success: 0, failed: 0, byModel: {} };
   }
 }
 

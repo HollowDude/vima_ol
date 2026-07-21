@@ -19,20 +19,12 @@ class SyncService {
   async syncAll() {
     const startTime = Date.now();
     const syncEntry = SyncHistory.createSyncAllEntry(startTime);
+    let finalEntry;
     
     try {
       // FASE 1: MASTER DATA (PULL)
       try {
-        const { projectChanged, oldProject } = await this.syncMasterData();
-        const now = new Date();
-        const dayOfMonth = now.getDate();
-        
-        if (dayOfMonth > 25 && projectChanged && oldProject) {
-          await StorageService.setItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID, oldProject.id);
-        } else if (dayOfMonth <= 25 && projectChanged) {
-          await StorageService.removeItem(STORAGE_KEYS.PREVIOUS_PROJECT_ID);
-          await this.clearProjectCacheSafe();
-        }
+        await this.syncMasterData();
         
         SyncHistory.recordPullPhase(syncEntry, 'MASTER', {
           'res.country': { count: 1, updated: 1 },
@@ -121,7 +113,7 @@ class SyncService {
       } catch (e) {}
 
       // FINALIZAR Y GUARDAR
-      const finalEntry = SyncHistory.finalizeSyncEntry(syncEntry);
+      finalEntry = SyncHistory.finalizeSyncEntry(syncEntry);
       await SyncHistory.addSyncHistoryEntry(finalEntry);
       
       return {
@@ -176,32 +168,18 @@ class SyncService {
       // Otros cambios pendientes
       const otherResult = await Pending.syncPendingChangesNonSurvey();
       if (otherResult) {
-        if (otherResult.tasks) {
-          operationsData['project.task'] = {
-            created: otherResult.tasks.created || 0,
-            updated: otherResult.tasks.updated || 0,
-            failed: otherResult.tasks.failed || 0
-          };
-          if (otherResult.tasks.failed) {
-            errors.push({ model: 'project.task', count: otherResult.tasks.failed });
-          }
-        }
-        if (otherResult.leads) {
-          operationsData['crm.lead'] = {
-            created: otherResult.leads.created || 0,
-            updated: otherResult.leads.updated || 0,
-            failed: otherResult.leads.failed || 0
-          };
-          if (otherResult.leads.failed) {
-            errors.push({ model: 'crm.lead', count: otherResult.leads.failed });
-          }
-        }
-        if (otherResult.clients) {
-          operationsData['res.partner'] = {
-            created: otherResult.clients.created || 0,
-            updated: otherResult.clients.updated || 0,
-            failed: otherResult.clients.failed || 0
-          };
+        if (otherResult.byModel) {
+          Object.entries(otherResult.byModel).forEach(([model, stats]) => {
+            operationsData[model] = {
+              created: stats.created || 0,
+              updated: stats.updated || 0,
+              deleted: stats.deleted || 0,
+              failed: stats.failed || 0
+            };
+            if (stats.failed > 0) {
+              errors.push({ model, count: stats.failed });
+            }
+          });
         }
       }
       

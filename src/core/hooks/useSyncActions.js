@@ -1,6 +1,7 @@
 import { useCallback, useRef } from 'react';
 import { useSyncContext } from '../context/SyncContext';
 import SyncService from '../sync/sync.service';
+import SyncHistory from '../sync/sync.history';
 import useNetwork from './useNetwork';
 import StorageService from '../storage/storage.service';
 import { STORAGE_KEYS } from '../sync/sync.constants';
@@ -41,12 +42,26 @@ export default function useSyncActions(onUnauthorized = () => {}) {
   const syncAll = useCallback(async (opts = {}) => {
     if (!isOnline) {
       showToast('Sin conexión. Los cambios se guardarán para luego.', 'warning');
+      await SyncHistory.addSyncHistoryEntry({
+        type: 'syncAll',
+        direction: 'both',
+        status: 'cancelled',
+        timestamp: new Date().toISOString(),
+        duration: 0,
+        error: 'Intento cancelado — sin conexión',
+        pull: { totalModels: 0, totalRecords: 0, models: {}, status: 'cancelled', errors: [] },
+        push: { totalModels: 0, totalRecords: 0, models: {}, status: 'cancelled', errors: [] },
+        phaseSequence: [],
+      });
       return null;
     }
     if (isSyncingRef.current) return null;
 
     isSyncingRef.current = true;
     startSync();
+
+    const overallStartedAt = Date.now();
+    const syncEntry = SyncHistory.createSyncAllEntry(overallStartedAt);
 
     const results = {
       pending:     { success: false, uploaded: 0,  failed: 0  },
@@ -62,13 +77,19 @@ export default function useSyncActions(onUnauthorized = () => {}) {
     try {
       // ── 1. Maestros ────────────────────────────────────────────────────────
       updatePhase('MASTER');
+      const masterStartedAt = Date.now();
       try {
-        await withRetry(() => SyncService.syncMasterData(), 'Datos base');
+        const masterData = await withRetry(() => SyncService.syncMasterData(), 'Datos base');
         results.master.success = true;
+        SyncHistory.recordPullPhase(syncEntry, 'MASTER', {
+          'res.country': { count: 1, duration: Date.now() - masterStartedAt },
+          'res.country.state': { count: 1, duration: Date.now() - masterStartedAt },
+          'res.municipality': { count: 1, duration: Date.now() - masterStartedAt },
+        });
       } catch (e) {
         results.master.error = e.message;
-        
-        // Verificar si es error de autorización
+        syncEntry.pull.errors.push({ phase: 'MASTER', error: e.message });
+
         const errorResult = handleOdooError(e, {
           onLogout: onUnauthorized,
           onShowToast: showToast,
@@ -81,14 +102,32 @@ export default function useSyncActions(onUnauthorized = () => {}) {
 
       // ── 2. Subir pendientes ────────────────────────────────────────────────
       updatePhase('PENDING');
+      const pendingStartedAt = Date.now();
       try {
         const pendingResult = await withRetry(
           () => SyncService.syncPendingChanges(), 'Cambios pendientes'
         );
-        const uploaded = (pendingResult?.otherResult?.success || 0) +
-                         (pendingResult?.surveyResult?.success || 0);
-        const failed   = (pendingResult?.otherResult?.failed  || 0) +
-                         (pendingResult?.surveyResult?.failed  || 0);
+
+        const pushModels = {};
+        let totalPushOps = 0;
+        if (pendingResult) {
+          Object.entries(pendingResult).forEach(([model, stats]) => {
+            if (typeof stats === 'object' && stats !== null) {
+              pushModels[model] = {
+                created: stats.created || 0,
+                updated: stats.updated || 0,
+                deleted: stats.deleted || 0,
+                failed: stats.failed || 0,
+                duration: Date.now() - pendingStartedAt,
+              };
+              totalPushOps += (stats.created || 0) + (stats.updated || 0) + (stats.deleted || 0) + (stats.failed || 0);
+            }
+          });
+        }
+        SyncHistory.recordPushPhase(syncEntry, pushModels);
+
+        const uploaded = totalPushOps;
+        const failed   = Object.values(pushModels).reduce((s, m) => s + (m.failed || 0), 0);
 
         results.pending.success  = true;
         results.pending.uploaded = uploaded;
@@ -104,13 +143,12 @@ export default function useSyncActions(onUnauthorized = () => {}) {
         await refreshPendingCount();
       } catch (e) {
         results.pending.error = e.message;
-        
-        // Manejo de errores de pending con detección de autorización
+        syncEntry.push.errors.push({ phase: 'PENDING', error: e.message });
+
         const errorResult = handleOdooError(e, {
           onLogout: onUnauthorized,
           onShowToast: showToast,
           onPermissionDenied: (error, context) => {
-            // Error de permisos específico en encuestas/cambios
             showToast(
               'No se pudieron guardar los cambios por falta de permisos. Ponte en contacto con un administrador.',
               'warning',
@@ -126,17 +164,23 @@ export default function useSyncActions(onUnauthorized = () => {}) {
 
       // ── 3. Clientes, Tareas y Leads en paralelo ────────────────────────────
       updatePhase('CLIENTS');
+      const dataPhaseStartedAt = Date.now();
       const [clientsRes, tasksRes, leadsRes] = await Promise.allSettled([
         withRetry(() => SyncService.syncClients(), 'Clientes'),
         withRetry(() => SyncService.syncTasks(), 'Tareas'),
         withRetry(() => SyncService.syncLeads(), 'Oportunidades'),
       ]);
+      const dataPhaseDuration = Date.now() - dataPhaseStartedAt;
 
       if (clientsRes.status === 'fulfilled') {
         results.clients.success = true;
         results.clients.count   = clientsRes.value?.length || 0;
+        SyncHistory.recordPullPhase(syncEntry, 'CLIENTS', {
+          'res.partner': { count: results.clients.count, created: results.clients.count, duration: dataPhaseDuration }
+        });
       } else {
         results.clients.error = clientsRes.reason?.message;
+        syncEntry.pull.errors.push({ phase: 'CLIENTS', error: clientsRes.reason?.message });
         handleOdooError(clientsRes.reason, {
           onLogout: onUnauthorized,
           onShowToast: showToast,
@@ -152,8 +196,12 @@ export default function useSyncActions(onUnauthorized = () => {}) {
         if (tasksRes.value?.subtasks?.length) {
           await SyncService.purgeExtendedTasksWithIds(tasksRes.value.subtasks.map(t => t.id));
         }
+        SyncHistory.recordPullPhase(syncEntry, 'TASKS', {
+          'project.task': { count: results.tasks.count, created: results.tasks.count, duration: dataPhaseDuration }
+        });
       } else {
         results.tasks.error = tasksRes.reason?.message;
+        syncEntry.pull.errors.push({ phase: 'TASKS', error: tasksRes.reason?.message });
         handleOdooError(tasksRes.reason, {
           onLogout: onUnauthorized,
           onShowToast: showToast,
@@ -166,8 +214,12 @@ export default function useSyncActions(onUnauthorized = () => {}) {
       if (leadsRes.status === 'fulfilled') {
         results.leads.success = true;
         results.leads.count   = Array.isArray(leadsRes.value) ? leadsRes.value.length : 0;
+        SyncHistory.recordPullPhase(syncEntry, 'LEADS', {
+          'crm.lead': { count: results.leads.count, created: results.leads.count, duration: dataPhaseDuration }
+        });
       } else {
         results.leads.error = leadsRes.reason?.message;
+        syncEntry.pull.errors.push({ phase: 'LEADS', error: leadsRes.reason?.message });
         handleOdooError(leadsRes.reason, {
           onLogout: onUnauthorized,
           onShowToast: showToast,
@@ -179,22 +231,31 @@ export default function useSyncActions(onUnauthorized = () => {}) {
 
       // ── 4. Comentarios ─────────────────────────────────────────────────────
       updatePhase('COMMENTS');
+      const commentsStartedAt = Date.now();
       try {
         await withRetry(() => SyncService.syncComments?.() || Promise.resolve(), 'Comentarios');
         results.comments.success = true;
+        SyncHistory.recordPullPhase(syncEntry, 'COMMENTS', {
+          'mail.message': { count: 0, duration: Date.now() - commentsStartedAt }
+        });
       } catch (e) {
         results.comments.error = e.message;
+        syncEntry.pull.errors.push({ phase: 'COMMENTS', error: e.message });
       }
 
       // ── 5. Encuestas ───────────────────────────────────────────────────────
       updatePhase('SURVEYS');
+      const surveysStartedAt = Date.now();
       try {
         await withRetry(() => SyncService.syncSurveys(), 'Encuestas');
         results.surveys.success = true;
+        SyncHistory.recordPullPhase(syncEntry, 'SURVEYS', {
+          'survey.survey': { count: 0, duration: Date.now() - surveysStartedAt }
+        });
       } catch (e) {
         results.surveys.error = e.message;
-        
-        // Manejo específico de errores en encuestas
+        syncEntry.pull.errors.push({ phase: 'SURVEYS', error: e.message });
+
         handleOdooError(e, {
           onLogout: onUnauthorized,
           onShowToast: showToast,
@@ -210,16 +271,24 @@ export default function useSyncActions(onUnauthorized = () => {}) {
 
       // ── 6. Adjuntos ────────────────────────────────────────────────────────
       updatePhase('ATTACHMENTS');
+      const attachmentsStartedAt = Date.now();
       try {
         await withRetry(() => SyncService.syncAttachments(), 'Adjuntos');
         results.attachments.success = true;
+        SyncHistory.recordPullPhase(syncEntry, 'ATTACHMENTS', {
+          'ir.attachment': { count: 0, duration: Date.now() - attachmentsStartedAt }
+        });
       } catch (e) {
         results.attachments.error = e.message;
+        syncEntry.pull.errors.push({ phase: 'ATTACHMENTS', error: e.message });
       }
 
       // ── Resumen ────────────────────────────────────────────────────────────
       updatePhase('DONE');
       await StorageService.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
+
+      const finalEntry = SyncHistory.finalizeSyncEntry(syncEntry);
+      await SyncHistory.addSyncHistoryEntry(finalEntry);
 
       const successCount = Object.values(results).filter(r => r.success).length;
       const totalModules = Object.keys(results).length;
@@ -246,9 +315,14 @@ export default function useSyncActions(onUnauthorized = () => {}) {
         onLogout: onUnauthorized,
         onShowToast: showToast,
       });
-      
+
       showToast('Error crítico en sincronización', 'error', 6000);
       updatePhase('ERROR');
+
+      const failedEntry = SyncHistory.finalizeSyncEntry(syncEntry, 'failed');
+      failedEntry.errors.push({ operation: 'syncAll', error: fatalError.message });
+      await SyncHistory.addSyncHistoryEntry(failedEntry);
+
       await finishSync({ ...results, fatalError: fatalError.message });
       return null;
     } finally {
@@ -261,6 +335,19 @@ export default function useSyncActions(onUnauthorized = () => {}) {
       showToast('Sin conexión', 'warning');
       return null;
     }
+
+    const startedAt = Date.now();
+    const syncEntry = {
+      id: SyncHistory.createSyncAllEntry().id,
+      timestamp: new Date().toISOString(),
+      type: 'syncModule',
+      direction: 'pull',
+      status: 'syncing',
+      startedAt,
+      phaseSequence: [moduleName.toUpperCase()],
+      pull: { totalModels: 0, totalRecords: 0, models: {}, status: 'idle', errors: [] },
+      push: { totalModels: 0, totalRecords: 0, models: {}, status: 'idle', errors: [] },
+    };
 
     try {
       await SyncService.syncPendingChanges();
@@ -278,21 +365,38 @@ export default function useSyncActions(onUnauthorized = () => {}) {
         case 'clients':
           result = await SyncService.syncClients();
           showToast(`Clientes actualizados (${result?.length || 0})`, 'success');
+          SyncHistory.recordPullPhase(syncEntry, 'CLIENTS', {
+            'res.partner': { count: result?.length || 0, created: result?.length || 0, duration: Date.now() - startedAt }
+          });
           break;
         case 'leads':
           result = await SyncService.syncLeads();
           showToast(`Oportunidades actualizadas`, 'success');
+          SyncHistory.recordPullPhase(syncEntry, 'LEADS', {
+            'crm.lead': { count: Array.isArray(result) ? result.length : 0, created: Array.isArray(result) ? result.length : 0, duration: Date.now() - startedAt }
+          });
           break;
         case 'tasks':
           result = await SyncService.syncTasks();
           showToast(`Tareas actualizadas`, 'success');
+          SyncHistory.recordPullPhase(syncEntry, 'TASKS', {
+            'project.task': { count: result?.subtasks?.length || 0, created: result?.subtasks?.length || 0, duration: Date.now() - startedAt }
+          });
           break;
         default:
-          result = await SyncService.syncAll();
+          result = null;
       }
+
+      const finalEntry = SyncHistory.finalizeSyncEntry(syncEntry);
+      await SyncHistory.addSyncHistoryEntry(finalEntry);
+
       await refreshPendingCount();
       return result;
     } catch (err) {
+      const failedEntry = SyncHistory.finalizeSyncEntry(syncEntry, 'failed');
+      failedEntry.errors.push({ operation: moduleName, error: err.message });
+      await SyncHistory.addSyncHistoryEntry(failedEntry);
+
       handleOdooError(err, {
         onLogout: onUnauthorized,
         onShowToast: showToast,

@@ -30,10 +30,16 @@ export async function getCurrentProject(){
         const d = String(today.getDate()).padStart(2, '0');
         const todayStr = `${y}-${m}-${d}`;
 
+        // Proyecto activo: fecha_inicio <= hoy Y (fecha_fin >= hoy O fecha_fin es null/vacía)
         const projects = await OdooService.searchRead(
             'project.project',
-            [['date_start', '<=', todayStr]],
-            // ✅ FIX: incluir 'date' (fecha de fin del proyecto en Odoo)
+            // ✅ Dominio corregido para Odoo
+            ['&', 
+             ['date_start', '<=', todayStr], 
+             '|', 
+             ['date', '>=', todayStr], 
+             ['date', '=', false]
+            ],
             ['id', 'display_name', 'date_start', 'date'],
             1, 0, 'date_start desc'
         );
