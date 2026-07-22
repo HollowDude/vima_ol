@@ -2,6 +2,7 @@ import OdooService from '../api/odoo.service';
 import StorageService from '../storage/storage.service';
 import { STORAGE_KEYS } from './sync.constants';
 import { addPendingChange } from './sync.pending';
+import { decodeSurveyQuestion, decodeHtmlEntities } from './sync.utils';
 
 export async function syncSurveys() {
   try {
@@ -145,16 +146,28 @@ export async function syncSurveys() {
         .map(id => allAnswers.find(a => a.id === id))
         .filter(Boolean);
 
-      return { 
+      return decodeSurveyQuestion({ 
         ...q, 
-        suggested_answer_ids: suggestedAnswers.map(a => [a.id, a.value]),
-        matrix_row_ids: matrixRows.map(a => [a.id, a.value])
-      };
+        suggested_answer_ids: suggestedAnswers.map(a => [a.id, decodeHtmlEntities(a.value)]),
+        matrix_row_ids: matrixRows.map(a => [a.id, decodeHtmlEntities(a.value)])
+      });
     });
 
-    await StorageService.setItem(STORAGE_KEYS.SURVEYS, surveys);
+    const decodedSurveys = surveys.map(s => ({
+      ...s,
+      title: decodeHtmlEntities(s.title),
+      description: decodeHtmlEntities(s.description),
+      description_done: decodeHtmlEntities(s.description_done),
+    }));
+
+    const decodedAnswers = allAnswers.map(a => ({
+      ...a,
+      value: decodeHtmlEntities(a.value),
+    }));
+
+    await StorageService.setItem(STORAGE_KEYS.SURVEYS, decodedSurveys);
     await StorageService.setItem(STORAGE_KEYS.SURVEY_QUESTIONS, enrichedQuestions);
-    await StorageService.setItem(STORAGE_KEYS.SURVEY_ANSWERS, allAnswers);
+    await StorageService.setItem(STORAGE_KEYS.SURVEY_ANSWERS, decodedAnswers);
 
   } catch (error) {
     console.error('❌ Error sincronizando encuestas:', error);
@@ -235,6 +248,9 @@ export async function getSurveysForTask(taskId) {
 
       return {
         ...surveyData,
+        title: decodeHtmlEntities(surveyData.title),
+        description: decodeHtmlEntities(surveyData.description),
+        description_done: decodeHtmlEntities(surveyData.description_done),
         relation_id: rel.id,
         survey_user_input_id: userInputId,
         user_input: userInput,
@@ -268,7 +284,8 @@ export async function getSurveyQuestions(surveyId) {
     
     const questions = allQuestions
       .filter(q => questionIds.includes(q.id))
-      .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
+      .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
+      .map(q => decodeSurveyQuestion(q));
 
     return questions;
   } catch (error) {

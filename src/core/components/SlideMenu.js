@@ -231,7 +231,7 @@ export default function SlideMenu({ visible, onClose, userData, username, onLogo
               onPress={() => { onClose?.(); onNavigateToSyncHistory?.(); }}
               activeOpacity={0.7}
             >
-              <Feather name="history" size={18} color="#3B82F6" />
+              <Feather name="clock" size={18} color="#3B82F6" />
               <Text style={styles.syncHistoryText}>Historial de sincronización</Text>
             </TouchableOpacity>
 

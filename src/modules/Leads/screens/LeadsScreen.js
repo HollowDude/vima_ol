@@ -3,7 +3,6 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   RefreshControl, Alert, TextInput,
 } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import Card from '../../../core/components/Card';
 import DashboardHeader from '../../../core/components/DashboardHeader';
@@ -11,9 +10,7 @@ import LeadCard from '../../../core/components/LeadCard';
 import LeadDetailModal from '../../../core/components/LeadDetailModal';
 import TaskDetailModal from '../../../core/components/TaskDetailModal';
 import CreateLeadModal from '../../../core/components/CreateLeadModal';
-import ToastContainer from '../../../core/components/ToastContainer';
-import SlideMenu from '../../../core/components/SlideMenu';
-import ExpandableFAB from '../../../core/components/ExpandableFab';
+import ScreenLayout from '../../../core/components/ScreenLayout';
 import useNetwork from '../../../core/hooks/useNetwork';
 import useSyncActions from '../../../core/hooks/useSyncActions';
 import SyncService from '../../../core/sync/sync.service';
@@ -21,7 +18,7 @@ import { usePrevious } from '../../../core/hooks/usePrevious';
 import { formatCurrency, getCurrencyCode } from '../../../core/utils/currencyhelper';
 import OdooService from '../../../core/api/odoo.service';
 
-export default function LeadsScreen({ userData, username, onBack, onLogout, onNavigateToTasks }) {
+export default function LeadsScreen({ userData, username, onBack, onLogout, onNavigateToTasks, onNavigateToSyncHistory }) {
   const { isOnline }            = useNetwork();
   const { syncAll, syncModule } = useSyncActions();
 
@@ -184,188 +181,180 @@ export default function LeadsScreen({ userData, username, onBack, onLogout, onNa
   ];
 
   return (
-    <SafeAreaProvider style={styles.safeArea}>
-      <View style={styles.container}>
-        <ToastContainer />
+    <ScreenLayout
+      userData={userData}
+      username={username}
+      onLogout={onLogout}
+      menuVisible={menuVisible}
+      setMenuVisible={setMenuVisible}
+      fabActions={fabActions}
+      onNavigateToSyncHistory={onNavigateToSyncHistory}
+    >
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh}
+            tintColor="#64c27b" colors={['#64c27b']} />
+        }
+      >
+        <Card style={styles.mainCard}>
+          <DashboardHeader userName={username || 'Usuario'} isOnline={isOnline} />
 
-        <SlideMenu
-          visible={menuVisible}
-          onClose={() => setMenuVisible(false)}
-          userData={userData}
-          username={username}
-          onLogout={onLogout}
-        />
-
-        <ExpandableFAB actions={fabActions} />
-
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh}
-              tintColor="#64c27b" colors={['#64c27b']} />
-          }
-        >
-          <Card style={styles.mainCard}>
-            <DashboardHeader userName={username || 'Usuario'} isOnline={isOnline} />
-
-            {/* Toggle Mis oportunidades / Todas */}
-            <View style={styles.toggleSection}>
-              <View style={styles.toggleRow}>
-                <TouchableOpacity
-                  style={[styles.toggleBtn, showOnlyOwn && styles.toggleBtnActive]}
-                  onPress={() => setShowOnlyOwn(true)}
-                  activeOpacity={0.8}
-                >
-                  <Feather name="user-check" size={13} color={showOnlyOwn ? '#fff' : '#9CA3AF'} />
-                  <Text style={[styles.toggleBtnTxt, showOnlyOwn && styles.toggleBtnTxtActive]}>
-                    Mis oportunidades ({ownCount})
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.toggleBtn, !showOnlyOwn && styles.toggleBtnActive]}
-                  onPress={() => setShowOnlyOwn(false)}
-                  activeOpacity={0.8}
-                >
-                  <Feather name="briefcase" size={13} color={!showOnlyOwn ? '#fff' : '#9CA3AF'} />
-                  <Text style={[styles.toggleBtnTxt, !showOnlyOwn && styles.toggleBtnTxtActive]}>
-                    Todas ({leads.length})
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Pipeline */}
-            <View style={styles.dashboard}>
-              <Text style={styles.dashboardTitle}>Flujo de Oportunidades</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dashboardScroll}>
-                {stages.map((stage, i) => {
-                  const count    = getLeadsCountByStage(stage.id);
-                  const isActive = selectedStage === stage.id;
-                  const color    = getStageColor(i);
-                  return (
-                    <TouchableOpacity
-                      key={stage.id}
-                      style={[styles.stageCard, isActive && styles.stageCardActive, { borderTopColor: color }]}
-                      onPress={() => setSelectedStage(prev => prev === stage.id ? null : stage.id)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={styles.stageCardHeader}>
-                        <View style={[styles.stageIndicator, { backgroundColor: color }]} />
-                        <Text style={styles.stageCardCount}>{count}</Text>
-                      </View>
-                      <Text style={styles.stageCardName} numberOfLines={2}>{stage.name}</Text>
-                      {i < stages.length - 1 && <Feather name="arrow-right" size={12} color="#D1D5DB" style={styles.stageArrow} />}
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-
-              <View style={styles.dashboardSummary}>
-                <View style={styles.summaryItem}>
-                  <Feather name="briefcase" size={16} color="#64c27b" />
-                  <Text style={styles.summaryText}>
-                    {baseLeadsForRevenue.length} oportunidad{baseLeadsForRevenue.length !== 1 ? 'es' : ''}
-                  </Text>
-                </View>
-                <View style={styles.summaryItem}>
-                  <Text style={styles.summaryText}>{formatTotalRevenue()}</Text>
-                </View>
-              </View>
-            </View>
-
-            {/* Buscador */}
-            <View style={styles.searchSection}>
-              <View style={styles.searchContainer}>
-                <Feather name="search" size={18} color="#9CA3AF" style={styles.searchIcon} />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="Buscar oportunidad..."
-                  placeholderTextColor="#9CA3AF"
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                />
-                {searchQuery.length > 0 && (
-                  <TouchableOpacity onPress={() => setSearchQuery('')}>
-                    <Feather name="x" size={18} color="#9CA3AF" />
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-
-            {/* Lista */}
-            <View style={styles.leadsSection}>
-              <View style={styles.leadsSectionHeader}>
-                <Text style={styles.leadsSectionTitle}>
-                  {selectedStage
-                    ? `${stages.find(s => s.id === selectedStage)?.name || ''} (${filteredLeads.length})`
-                    : searchQuery
-                      ? `Resultados (${filteredLeads.length})`
-                      : `${showOnlyOwn ? 'Mis oportunidades' : 'Todas'} (${filteredLeads.length})`}
+          {/* Toggle Mis oportunidades / Todas */}
+          <View style={styles.toggleSection}>
+            <View style={styles.toggleRow}>
+              <TouchableOpacity
+                style={[styles.toggleBtn, showOnlyOwn && styles.toggleBtnActive]}
+                onPress={() => setShowOnlyOwn(true)}
+                activeOpacity={0.8}
+              >
+                <Feather name="user-check" size={13} color={showOnlyOwn ? '#fff' : '#9CA3AF'} />
+                <Text style={[styles.toggleBtnTxt, showOnlyOwn && styles.toggleBtnTxtActive]}>
+                  Mis oportunidades ({ownCount})
                 </Text>
-                {(selectedStage || searchQuery) && (
-                  <TouchableOpacity 
-                    onPress={() => { setSelectedStage(null); setSearchQuery(''); }} 
-                    style={styles.clearFilterButton}
-                  >
-                    <Feather name="x" size={16} color="#6B7280" />
-                    <Text style={styles.clearFilterText}>Limpiar</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
+              </TouchableOpacity>
 
-              {filteredLeads.length === 0 ? (
-                <View style={styles.emptyState}>
-                  <Feather name="briefcase" size={48} color="#D1D5DB" />
-                  <Text style={styles.emptyText}>
-                    {searchQuery
-                      ? 'No se encontraron oportunidades'
-                      : selectedStage
-                        ? 'No hay oportunidades en esta etapa'
-                        : 'No hay oportunidades'}
-                  </Text>
-                </View>
-              ) : (
-                filteredLeads.map(lead => (
-                  <LeadCard
-                    key={lead.id} lead={lead} stages={stages}
-                    onPress={() => setSelectedLead(lead)}
-                    onMoveToNextStage={() => handleMoveToNextStage(lead)}
-                  />
-                ))
+              <TouchableOpacity
+                style={[styles.toggleBtn, !showOnlyOwn && styles.toggleBtnActive]}
+                onPress={() => setShowOnlyOwn(false)}
+                activeOpacity={0.8}
+              >
+                <Feather name="briefcase" size={13} color={!showOnlyOwn ? '#fff' : '#9CA3AF'} />
+                <Text style={[styles.toggleBtnTxt, !showOnlyOwn && styles.toggleBtnTxtActive]}>
+                  Todas ({leads.length})
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Pipeline */}
+          <View style={styles.dashboard}>
+            <Text style={styles.dashboardTitle}>Flujo de Oportunidades</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dashboardScroll}>
+              {stages.map((stage, i) => {
+                const count    = getLeadsCountByStage(stage.id);
+                const isActive = selectedStage === stage.id;
+                const color    = getStageColor(i);
+                return (
+                  <TouchableOpacity
+                    key={stage.id}
+                    style={[styles.stageCard, isActive && styles.stageCardActive, { borderTopColor: color }]}
+                    onPress={() => setSelectedStage(prev => prev === stage.id ? null : stage.id)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.stageCardHeader}>
+                      <View style={[styles.stageIndicator, { backgroundColor: color }]} />
+                      <Text style={styles.stageCardCount}>{count}</Text>
+                    </View>
+                    <Text style={styles.stageCardName} numberOfLines={2}>{stage.name}</Text>
+                    {i < stages.length - 1 && <Feather name="arrow-right" size={12} color="#D1D5DB" style={styles.stageArrow} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            <View style={styles.dashboardSummary}>
+              <View style={styles.summaryItem}>
+                <Feather name="briefcase" size={16} color="#64c27b" />
+                <Text style={styles.summaryText}>
+                  {baseLeadsForRevenue.length} oportunidad{baseLeadsForRevenue.length !== 1 ? 'es' : ''}
+                </Text>
+              </View>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryText}>{formatTotalRevenue()}</Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Buscador */}
+          <View style={styles.searchSection}>
+            <View style={styles.searchContainer}>
+              <Feather name="search" size={18} color="#9CA3AF" style={styles.searchIcon} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Buscar oportunidad..."
+                placeholderTextColor="#9CA3AF"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setSearchQuery('')}>
+                  <Feather name="x" size={18} color="#9CA3AF" />
+                </TouchableOpacity>
               )}
             </View>
-          </Card>
-        </ScrollView>
+          </View>
 
-        <LeadDetailModal
-          visible={!!selectedLead} lead={selectedLead}
-          onClose={() => setSelectedLead(null)}
-          onLeadUpdated={handleLeadUpdated}
-          onLeadDeleted={handleLeadDeleted}
-          onViewTask={(task) => setSelectedTask(task)}
-        />
-        <TaskDetailModal
-          visible={!!selectedTask}
-          task={selectedTask}
-          allTasks={[]}
-          onClose={() => setSelectedTask(null)}
-          onNavigateToLeads={onNavigateToTasks}
-        />
-        <CreateLeadModal
-          visible={isCreateModalVisible} userData={userData}
-          onClose={() => setCreateModal(false)}
-          onCreated={handleLeadCreated}
-        />
-      </View>
-    </SafeAreaProvider>
+          {/* Lista */}
+          <View style={styles.leadsSection}>
+            <View style={styles.leadsSectionHeader}>
+              <Text style={styles.leadsSectionTitle}>
+                {selectedStage
+                  ? `${stages.find(s => s.id === selectedStage)?.name || ''} (${filteredLeads.length})`
+                  : searchQuery
+                    ? `Resultados (${filteredLeads.length})`
+                    : `${showOnlyOwn ? 'Mis oportunidades' : 'Todas'} (${filteredLeads.length})`}
+              </Text>
+              {(selectedStage || searchQuery) && (
+                <TouchableOpacity 
+                  onPress={() => { setSelectedStage(null); setSearchQuery(''); }} 
+                  style={styles.clearFilterButton}
+                >
+                  <Feather name="x" size={16} color="#6B7280" />
+                  <Text style={styles.clearFilterText}>Limpiar</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {filteredLeads.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Feather name="briefcase" size={48} color="#D1D5DB" />
+                <Text style={styles.emptyText}>
+                  {searchQuery
+                    ? 'No se encontraron oportunidades'
+                    : selectedStage
+                      ? 'No hay oportunidades en esta etapa'
+                      : 'No hay oportunidades'}
+                </Text>
+              </View>
+            ) : (
+              filteredLeads.map(lead => (
+                <LeadCard
+                  key={lead.id} lead={lead} stages={stages}
+                  onPress={() => setSelectedLead(lead)}
+                  onMoveToNextStage={() => handleMoveToNextStage(lead)}
+                />
+              ))
+            )}
+          </View>
+        </Card>
+      </ScrollView>
+
+      <LeadDetailModal
+        visible={!!selectedLead} lead={selectedLead}
+        onClose={() => setSelectedLead(null)}
+        onLeadUpdated={handleLeadUpdated}
+        onLeadDeleted={handleLeadDeleted}
+        onViewTask={(task) => setSelectedTask(task)}
+      />
+      <TaskDetailModal
+        visible={!!selectedTask}
+        task={selectedTask}
+        allTasks={[]}
+        onClose={() => setSelectedTask(null)}
+        onNavigateToLeads={onNavigateToTasks}
+      />
+      <CreateLeadModal
+        visible={isCreateModalVisible} userData={userData}
+        onClose={() => setCreateModal(false)}
+        onCreated={handleLeadCreated}
+      />
+    </ScreenLayout>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea:  { flex: 1, backgroundColor: '#f5f0ebff' },
-  container: { flex: 1 },
   scrollView:    { flex: 1 },
   scrollContent: { padding: 16, paddingTop: 80, paddingBottom: 180 },
   mainCard:      { marginBottom: 16 },

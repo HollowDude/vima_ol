@@ -3,16 +3,13 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions,
   RefreshControl, Alert, Modal, FlatList, ActivityIndicator, TextInput,
 } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import Card from '../../../core/components/Card';
 import DashboardHeader from '../../../core/components/DashboardHeader';
 import TaskCard from '../../../core/components/TaskCard';
 import TaskDetailModal from '../../../core/components/TaskDetailModal';
 import CreateTaskModal from '../../../core/components/CreateTaskModal';
-import ToastContainer from '../../../core/components/ToastContainer';
-import SlideMenu from '../../../core/components/SlideMenu';
-import ExpandableFAB from '../../../core/components/ExpandableFab';
+import ScreenLayout from '../../../core/components/ScreenLayout';
 import SelectionModal from '../../../core/components/SelectionModal';
 import useNetwork from '../../../core/hooks/useNetwork';
 import useSyncActions from '../../../core/hooks/useSyncActions';
@@ -267,7 +264,7 @@ function DayTasksModal({ visible, date, tasks, onClose, onSelectTask }) {
 }
 
 // ─── TasksScreen ───────────────────────────────────────────────────────────────
-export default function TasksScreen({ userData, username, onBack, onLogout, onNavigateToLeads }) {
+export default function TasksScreen({ userData, username, onBack, onLogout, onNavigateToLeads, onNavigateToSyncHistory }) {
   const { isOnline }            = useNetwork();
   const { syncAll, syncModule } = useSyncActions();
   const scrollViewRef           = useRef(null);
@@ -1033,23 +1030,20 @@ export default function TasksScreen({ userData, username, onBack, onLogout, onNa
 
   // ── Main render ───────────────────────────────────────────────────────────────
   return (
-    <SafeAreaProvider style={styles.safeArea}>
-      <View style={styles.container}>
-        <ToastContainer />
-        <SlideMenu
-          visible={menuVisible}
-          onClose={() => setMenuVisible(false)}
-          userData={userData}
-          username={username}
-          onLogout={onLogout}
-        />
-        <ExpandableFAB actions={fabActions} />
-
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
-          refreshControl={
-            <RefreshControl
+    <ScreenLayout
+      userData={userData}
+      username={username}
+      onLogout={onLogout}
+      menuVisible={menuVisible}
+      setMenuVisible={setMenuVisible}
+      fabActions={fabActions}
+      onNavigateToSyncHistory={onNavigateToSyncHistory}
+    >
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
               refreshing={refreshing}
               onRefresh={handleRefresh}
               tintColor="#64c27b"
@@ -1334,15 +1328,12 @@ export default function TasksScreen({ userData, username, onBack, onLogout, onNa
           onClose={() => setCreateModal(false)}
           onCreated={handleTaskCreated}
         />
-      </View>
-    </SafeAreaProvider>
+    </ScreenLayout>
   );
 }
 
 // ─── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  safeArea:      { flex: 1, backgroundColor: '#f5f0ebff' },
-  container:     { flex: 1 },
   scrollView:    { flex: 1 },
   scrollContent: { padding: 16, paddingTop: 80, paddingBottom: 140 },
   mainCard:      { marginBottom: 16 },

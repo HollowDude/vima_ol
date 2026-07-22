@@ -1,13 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, Animated, ScrollView
+  View, Text, StyleSheet, TouchableOpacity, RefreshControl, Alert, ScrollView
 } from 'react-native';
-import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import SyncHistoryService from '../../../core/sync/sync.history';
 import useNetwork from '../../../core/hooks/useNetwork';
 import DashboardHeader from '../../../core/components/DashboardHeader';
-import SlideMenu from '../../../core/components/SlideMenu';
+import ScreenLayout from '../../../core/components/ScreenLayout';
 import Card from '../../../core/components/Card';
 
 const STATUS_COLORS = {
@@ -307,7 +306,7 @@ function SyncHistoryItem({ item }) {
 // Pantalla principal
 // ──────────────────────────────────────────────────────────────────────────────
 
-export default function SyncHistoryScreen({ userData, username, onBack, onLogout, onNavigateToSyncHistory }) {
+export default function SyncHistoryScreen({ userData, username, onBack, onLogout, onNavigateToSyncHistory, onUnauthorized = () => {} }) {
   const { isOnline } = useNetwork();
   const [history, setHistory] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -356,6 +355,11 @@ export default function SyncHistoryScreen({ userData, username, onBack, onLogout
     return item.status === filter;
   });
 
+  const fabActions = [
+    { icon: 'menu',       onPress: () => setMenuVisible(true) },
+    { icon: 'arrow-left', onPress: onBack                     },
+  ];
+
   const renderFilterButton = (filterValue, icon, label) => (
     <TouchableOpacity
       style={[styles.filterButton, filter === filterValue && styles.filterButtonActive]}
@@ -374,19 +378,15 @@ export default function SyncHistoryScreen({ userData, username, onBack, onLogout
   );
 
   return (
-    <View style={styles.container}>
-      <SlideMenu
-        visible={menuVisible}
-        onClose={() => setMenuVisible(false)}
-        userData={userData}
-        username={username}
-        onLogout={onLogout}
-        onNavigateToSyncHistory={() => {
-          setMenuVisible(false);
-          onNavigateToSyncHistory?.();
-        }}
-      />
-
+    <ScreenLayout
+      userData={userData}
+      username={username}
+      onLogout={onLogout}
+      menuVisible={menuVisible}
+      setMenuVisible={setMenuVisible}
+      fabActions={fabActions}
+      onNavigateToSyncHistory={onNavigateToSyncHistory}
+    >
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
@@ -404,30 +404,14 @@ export default function SyncHistoryScreen({ userData, username, onBack, onLogout
 
           <View style={styles.cardContent}>
             {/* Título */}
-            <View style={styles.titleSection}>
-              <View style={styles.titleTop}>
-                <TouchableOpacity 
-                  onPress={onBack}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  <Feather name="arrow-left" size={24} color="#0B1B2A" />
-                </TouchableOpacity>
-                <Text style={styles.title}>Historial de Sincronización</Text>
-                <TouchableOpacity 
-                  onPress={() => setMenuVisible(true)}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  <Feather name="menu" size={24} color="#0B1B2A" />
-                </TouchableOpacity>
-              </View>
+            <Text style={styles.title}>Historial de Sincronización</Text>
 
-              {/* Filtros */}
-              <View style={styles.filterContainer}>
-                {renderFilterButton('all', 'inbox', 'Todas')}
-                {renderFilterButton('success', 'check-circle', 'Éxitos')}
-                {renderFilterButton('partial', 'alert-circle', 'Parciales')}
-                {renderFilterButton('failed', 'x-circle', 'Fallidas')}
-              </View>
+            {/* Filtros */}
+            <View style={styles.filterContainer}>
+              {renderFilterButton('all', 'inbox', 'Todas')}
+              {renderFilterButton('success', 'check-circle', 'Éxitos')}
+              {renderFilterButton('partial', 'alert-circle', 'Parciales')}
+              {renderFilterButton('failed', 'x-circle', 'Fallidas')}
             </View>
 
             {/* Lista de items */}
@@ -461,7 +445,7 @@ export default function SyncHistoryScreen({ userData, username, onBack, onLogout
           </View>
         )}
       </ScrollView>
-    </View>
+    </ScreenLayout>
   );
 }
 
@@ -470,10 +454,6 @@ export default function SyncHistoryScreen({ userData, username, onBack, onLogout
 // ──────────────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f0ebff',
-  },
   scrollView: {
     flex: 1,
   },
@@ -490,22 +470,11 @@ const styles = StyleSheet.create({
   },
 
   // Título
-  titleSection: {
-    marginBottom: 16,
-  },
-  titleTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-  },
   title: {
-    flex: 1,
     fontSize: 18,
     fontWeight: '700',
     color: '#0B1B2A',
-    marginHorizontal: 12,
-    textAlign: 'center',
+    marginBottom: 14,
   },
 
   // Filtros

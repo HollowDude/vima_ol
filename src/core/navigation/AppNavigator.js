@@ -1,21 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import LoginScreen from '../../modules/Auth/screens/LoginScreen';
-import HomeScreen from '../../modules/Home/screens/HomeScreen';
-import TasksScreen from '../../modules/Tasks/screens/TasksScreen';
-import ClientsScreen from '../../modules/Clients/screens/ClientsScreen';
-import LeadsScreen from '../../modules/Leads/screens/LeadsScreen';
-import SyncHistoryScreen from '../../modules/SyncHistory/screens/SyncHistoryScreen';
+import RootNavigator from './RootNavigator';
 import StorageService from '../storage/storage.service';
 import OdooService from '../api/odoo.service';
 import SyncService from '../sync/sync.service';
-import { SyncProvider } from '../context/SyncContext';
 
 export default function AppNavigator() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading]             = useState(true);
   const [userData, setUserData]               = useState(null);
-  const [currentScreen, setCurrentScreen]     = useState('home');
   const [username, setUsername]               = useState('');
 
   useEffect(() => {
@@ -75,14 +69,12 @@ export default function AppNavigator() {
       OdooService.clearSession();
       setUserData(null);
       setIsAuthenticated(false);
-      setCurrentScreen('home');
       console.log('[AppNavigator] Logout completado');
     } catch (error) {
       console.error('[AppNavigator] Error en logout:', error);
       setUsername('');
       setUserData(null);
       setIsAuthenticated(false);
-      setCurrentScreen('home');
     }
   };
 
@@ -102,51 +94,13 @@ export default function AppNavigator() {
     userData,
     username,
     onLogout: () => handleLogout(false),
-    onNavigateToLeads: () => setCurrentScreen('leads'),
-    onNavigateToTasks: () => setCurrentScreen('tasks'),
-    onNavigateToSyncHistory: () => setCurrentScreen('syncHistory'),
   };
 
   return (
-    <SyncProvider>
-      {currentScreen === 'tasks' && (
-        <TasksScreen
-          {...sharedProps}
-          onBack={() => setCurrentScreen('home')}
-          onUnauthorized={() => handleLogout(true)}
-        />
-      )}
-      {currentScreen === 'clients' && (
-        <ClientsScreen
-          {...sharedProps}
-          onBack={() => setCurrentScreen('home')}
-          onUnauthorized={() => handleLogout(true)}
-        />
-      )}
-      {currentScreen === 'leads' && (
-        <LeadsScreen
-          {...sharedProps}
-          onBack={() => setCurrentScreen('home')}
-          onUnauthorized={() => handleLogout(true)}
-        />
-      )}
-      {currentScreen === 'syncHistory' && (
-        <SyncHistoryScreen
-          {...sharedProps}
-          onBack={() => setCurrentScreen('home')}
-        />
-      )}
-      {currentScreen === 'home' && (
-        <HomeScreen
-          {...sharedProps}
-          onNavigateToTasks={() => setCurrentScreen('tasks')}
-          onNavigateToClients={() => setCurrentScreen('clients')}
-          onNavigateToLeads={() => setCurrentScreen('leads')}
-          onNavigateToSyncHistory={() => setCurrentScreen('syncHistory')}
-          onUnauthorized={() => handleLogout(true)}
-        />
-      )}
-    </SyncProvider>
+    <RootNavigator
+      sharedProps={sharedProps}
+      onUnauthorized={() => handleLogout(true)}
+    />
   );
 }
 

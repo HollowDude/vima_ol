@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import SyncService from '../sync/sync.service';
+import { decodeHtmlEntities } from '../sync/sync.utils';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -211,7 +212,7 @@ export default function SurveyResponsesModal({
                       <Feather name="check-circle" size={20} color="#10B981" />
                     </View>
                     <View style={styles.headerTitle}>
-                      <Text style={styles.title}>{survey.title}</Text>
+                      <Text style={styles.title}>{decodeHtmlEntities(survey.title)}</Text>
                       <Text style={styles.subtitle}>Encuesta completada</Text>
                     </View>
                   </View>
@@ -254,7 +255,7 @@ export default function SurveyResponsesModal({
                             <Text style={styles.questionNumberText}>{index + 1}</Text>
                           </View>
                           <View style={styles.questionTitleContainer}>
-                            <Text style={styles.questionTitle}>{question.title}</Text>
+                            <Text style={styles.questionTitle}>{decodeHtmlEntities(question.title)}</Text>
                             <Text style={styles.questionTypeText}>
                               Tipo: {question.question_type === 'char_box' ? 'Texto breve' : 
                                    question.question_type === 'text_box' ? 'Texto largo' :
@@ -274,7 +275,7 @@ export default function SurveyResponsesModal({
                             {isAnswered ? 'Tu respuesta:' : 'Sin responder'}
                           </Text>
                           <Text style={[styles.answerText, !isAnswered && styles.answerTextEmpty]}>
-                            {formatAnswer(question, answer)}
+                            {decodeHtmlEntities(formatAnswer(question, answer))}
                           </Text>
                         </View>
                       </View>

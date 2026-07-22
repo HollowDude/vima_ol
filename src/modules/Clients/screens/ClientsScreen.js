@@ -3,15 +3,12 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   RefreshControl, TextInput, Alert,
 } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import Card from '../../../core/components/Card';
 import DashboardHeader from '../../../core/components/DashboardHeader';
 import ClientCard from '../../../core/components/ClientCard';
 import ClientDetailModal from '../../../core/components/ClientDetailModal';
-import ToastContainer from '../../../core/components/ToastContainer';
-import SlideMenu from '../../../core/components/SlideMenu';
-import ExpandableFAB from '../../../core/components/ExpandableFab';
+import ScreenLayout from '../../../core/components/ScreenLayout';
 import useNetwork from '../../../core/hooks/useNetwork';
 import useSyncActions from '../../../core/hooks/useSyncActions';
 import SyncService from '../../../core/sync/sync.service';
@@ -19,7 +16,7 @@ import { useSyncContext } from '../../../core/context/SyncContext';
 import { usePrevious } from '../../../core/hooks/usePrevious';
 import OdooService from '../../../core/api/odoo.service';
 
-export default function ClientsScreen({ userData, username, onBack, onLogout }) {
+export default function ClientsScreen({ userData, username, onBack, onLogout, onNavigateToSyncHistory }) {
   const { isOnline }            = useNetwork();
   const { syncAll, syncModule } = useSyncActions();
   const { refreshPendingCount } = useSyncContext();
@@ -118,122 +115,114 @@ export default function ClientsScreen({ userData, username, onBack, onLogout }) 
   }).length;
 
   return (
-    <SafeAreaProvider style={styles.safeArea}>
-      <View style={styles.container}>
-        <ToastContainer />
+    <ScreenLayout
+      userData={userData}
+      username={username}
+      onLogout={onLogout}
+      menuVisible={menuVisible}
+      setMenuVisible={setMenuVisible}
+      fabActions={fabActions}
+      onNavigateToSyncHistory={onNavigateToSyncHistory}
+    >
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh}
+            tintColor="#64c27b" colors={['#64c27b']} />
+        }
+      >
+        <Card style={styles.mainCard}>
+          <DashboardHeader userName={username || 'Usuario'} isOnline={isOnline} />
 
-        <SlideMenu
-          visible={menuVisible}
-          onClose={() => setMenuVisible(false)}
-          userData={userData}
-          username={username}
-          onLogout={onLogout}
-        />
+          <View style={styles.content}>
 
-        <ExpandableFAB actions={fabActions} />
+            {/* ── Toggle Mis clientes / Todos ── */}
+            <View style={styles.toggleRow}>
+              <TouchableOpacity
+                style={[styles.toggleBtn, showOnlyOwn && styles.toggleBtnActive]}
+                onPress={() => setShowOnlyOwn(true)}
+                activeOpacity={0.8}
+              >
+                <Feather name="user-check" size={13} color={showOnlyOwn ? '#fff' : '#9CA3AF'} />
+                <Text style={[styles.toggleBtnTxt, showOnlyOwn && styles.toggleBtnTxtActive]}>
+                  Mis clientes ({ownCount})
+                </Text>
+              </TouchableOpacity>
 
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh}
-              tintColor="#64c27b" colors={['#64c27b']} />
-          }
-        >
-          <Card style={styles.mainCard}>
-            <DashboardHeader userName={username || 'Usuario'} isOnline={isOnline} />
+              <TouchableOpacity
+                style={[styles.toggleBtn, !showOnlyOwn && styles.toggleBtnActive]}
+                onPress={() => setShowOnlyOwn(false)}
+                activeOpacity={0.8}
+              >
+                <Feather name="users" size={13} color={!showOnlyOwn ? '#fff' : '#9CA3AF'} />
+                <Text style={[styles.toggleBtnTxt, !showOnlyOwn && styles.toggleBtnTxtActive]}>
+                  Todos ({clients.length})
+                </Text>
+              </TouchableOpacity>
+            </View>
 
-            <View style={styles.content}>
-
-              {/* ── Toggle Mis clientes / Todos ── */}
-              <View style={styles.toggleRow}>
-                <TouchableOpacity
-                  style={[styles.toggleBtn, showOnlyOwn && styles.toggleBtnActive]}
-                  onPress={() => setShowOnlyOwn(true)}
-                  activeOpacity={0.8}
-                >
-                  <Feather name="user-check" size={13} color={showOnlyOwn ? '#fff' : '#9CA3AF'} />
-                  <Text style={[styles.toggleBtnTxt, showOnlyOwn && styles.toggleBtnTxtActive]}>
-                    Mis clientes ({ownCount})
-                  </Text>
+            {/* Buscador */}
+            <View style={styles.searchContainer}>
+              <Feather name="search" size={18} color="#9CA3AF" style={styles.searchIcon} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Buscar cliente..."
+                placeholderTextColor="#9CA3AF"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setSearchQuery('')}>
+                  <Feather name="x" size={18} color="#9CA3AF" />
                 </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.toggleBtn, !showOnlyOwn && styles.toggleBtnActive]}
-                  onPress={() => setShowOnlyOwn(false)}
-                  activeOpacity={0.8}
-                >
-                  <Feather name="users" size={13} color={!showOnlyOwn ? '#fff' : '#9CA3AF'} />
-                  <Text style={[styles.toggleBtnTxt, !showOnlyOwn && styles.toggleBtnTxtActive]}>
-                    Todos ({clients.length})
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Buscador */}
-              <View style={styles.searchContainer}>
-                <Feather name="search" size={18} color="#9CA3AF" style={styles.searchIcon} />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="Buscar cliente..."
-                  placeholderTextColor="#9CA3AF"
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                />
-                {searchQuery.length > 0 && (
-                  <TouchableOpacity onPress={() => setSearchQuery('')}>
-                    <Feather name="x" size={18} color="#9CA3AF" />
-                  </TouchableOpacity>
-                )}
-              </View>
-
-              {/* Contador */}
-              <Text style={styles.counter}>
-                {loading
-                  ? 'Cargando...'
-                  : `${filteredClients.length} ${filteredClients.length === 1 ? 'cliente' : 'clientes'}` +
-                    (searchQuery ? ` encontrado${filteredClients.length === 1 ? '' : 's'}` : '')
-                }
-              </Text>
-
-              {/* Lista */}
-              {filteredClients.length === 0 && !loading ? (
-                <View style={styles.emptyState}>
-                  <Feather name="users" size={48} color="#D1D5DB" />
-                  <Text style={styles.emptyText}>
-                    {searchQuery ? 'No se encontraron clientes' : 'No hay clientes'}
-                  </Text>
-                  {!isOnline && !searchQuery && (
-                    <Text style={styles.emptySubtext}>Conéctate para sincronizar</Text>
-                  )}
-                </View>
-              ) : (
-                filteredClients.map(client => (
-                  <ClientCard
-                    key={client.id}
-                    client={client}
-                    onPress={() => setSelectedClient(client)}
-                  />
-                ))
               )}
             </View>
-          </Card>
-        </ScrollView>
 
-        <ClientDetailModal
-          visible={!!selectedClient}
-          client={selectedClient}
-          onClose={handleCloseClientModal}
-          onClientUpdated={handleClientUpdated}
-        />
-      </View>
-    </SafeAreaProvider>
+            {/* Contador */}
+            <Text style={styles.counter}>
+              {loading
+                ? 'Cargando...'
+                : `${filteredClients.length} ${filteredClients.length === 1 ? 'cliente' : 'clientes'}` +
+                  (searchQuery ? ` encontrado${filteredClients.length === 1 ? '' : 's'}` : '')
+              }
+            </Text>
+
+            {/* Lista */}
+            {filteredClients.length === 0 && !loading ? (
+              <View style={styles.emptyState}>
+                <Feather name="users" size={48} color="#D1D5DB" />
+                <Text style={styles.emptyText}>
+                  {searchQuery ? 'No se encontraron clientes' : 'No hay clientes'}
+                </Text>
+                {!isOnline && !searchQuery && (
+                  <Text style={styles.emptySubtext}>Conéctate para sincronizar</Text>
+                )}
+              </View>
+            ) : (
+              filteredClients.map(client => (
+                <ClientCard
+                  key={client.id}
+                  client={client}
+                  onPress={() => setSelectedClient(client)}
+                />
+              ))
+            )}
+          </View>
+        </Card>
+      </ScrollView>
+
+      <ClientDetailModal
+        visible={!!selectedClient}
+        client={selectedClient}
+        onClose={handleCloseClientModal}
+        onClientUpdated={handleClientUpdated}
+      />
+    </ScreenLayout>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea:  { flex: 1, backgroundColor: '#f5f0ebff' },
-  container: { flex: 1 },
   scrollView:    { flex: 1 },
   scrollContent: { padding: 16, paddingTop: 80 },
   mainCard:      { marginBottom: 16 },

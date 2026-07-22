@@ -7,6 +7,7 @@ import { Feather } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Slider from '@react-native-community/slider';
 import SyncService from '../sync/sync.service';
+import { decodeHtmlEntities } from '../sync/sync.utils';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -135,7 +136,7 @@ function QuestionCard({
       if (!hasAnswer) {
         Alert.alert(
           'Campo obligatorio', 
-          question.constr_error_msg || 'Debes responder esta pregunta para continuar'
+          decodeHtmlEntities(question.constr_error_msg) || 'Debes responder esta pregunta para continuar'
         );
         return;
       }
@@ -334,7 +335,7 @@ function QuestionCard({
                       {isSelected && <View style={styles.radioDot} />}
                     </View>
                     <Text style={[styles.choiceText, isSelected && styles.choiceTextSelected]}>
-                      {answerText}
+                      {decodeHtmlEntities(answerText)}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -365,7 +366,7 @@ function QuestionCard({
                       {isSelected && <Feather name="check" size={16} color="#fff" />}
                     </View>
                     <Text style={[styles.choiceText, isSelected && styles.choiceTextSelected]}>
-                      {answerText}
+                      {decodeHtmlEntities(answerText)}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -393,7 +394,7 @@ function QuestionCard({
                   const colText = Array.isArray(col) ? col[1] : col.value;
                   return (
                     <View key={idx} style={styles.matrixColHeaderContainer}>
-                      <Text style={styles.matrixColHeader}>{colText}</Text>
+                      <Text style={styles.matrixColHeader}>{decodeHtmlEntities(colText)}</Text>
                     </View>
                   );
                 })}
@@ -406,7 +407,7 @@ function QuestionCard({
                 return (
                   <View key={`row-${rowIdx}-${rowId}`} style={styles.matrixRow}>
                     <View style={styles.matrixRowHeader}>
-                      <Text style={styles.matrixRowText}>{rowText}</Text>
+                      <Text style={styles.matrixRowText}>{decodeHtmlEntities(rowText)}</Text>
                     </View>
                     <View style={styles.matrixOptions}>
                       {matrixCols.map((col, colIdx) => {
@@ -455,11 +456,11 @@ function QuestionCard({
           const third = range / 3;
           
           if (currentValue <= scaleMin + third) {
-            return question.scale_min_label || 'Mínimo';
+            return decodeHtmlEntities(question.scale_min_label) || 'Mínimo';
           } else if (currentValue >= scaleMax - third) {
-            return question.scale_max_label || 'Máximo';
+            return decodeHtmlEntities(question.scale_max_label) || 'Máximo';
           } else {
-            return question.scale_mid_label || 'Medio';
+            return decodeHtmlEntities(question.scale_mid_label) || 'Medio';
           }
         };
 
@@ -512,7 +513,7 @@ function QuestionCard({
                 <Text style={styles.scaleLabelValue}>{scaleMin}</Text>
                 {question.scale_min_label && (
                   <Text style={[styles.scaleLabelText, { color: '#EF4444' }]}>
-                    {question.scale_min_label}
+                    {decodeHtmlEntities(question.scale_min_label)}
                   </Text>
                 )}
               </View>
@@ -520,7 +521,7 @@ function QuestionCard({
                 <Text style={styles.scaleLabelValue}>{Math.floor((scaleMin + scaleMax) / 2)}</Text>
                 {question.scale_mid_label && (
                   <Text style={[styles.scaleLabelText, { color: '#F59E0B' }]}>
-                    {question.scale_mid_label}
+                    {decodeHtmlEntities(question.scale_mid_label)}
                   </Text>
                 )}
               </View>
@@ -528,7 +529,7 @@ function QuestionCard({
                 <Text style={styles.scaleLabelValue}>{scaleMax}</Text>
                 {question.scale_max_label && (
                   <Text style={[styles.scaleLabelText, { color: '#10B981' }]}>
-                    {question.scale_max_label}
+                    {decodeHtmlEntities(question.scale_max_label)}
                   </Text>
                 )}
               </View>
@@ -568,10 +569,10 @@ function QuestionCard({
           contentContainerStyle={styles.questionScrollContent}
           showsVerticalScrollIndicator={true}
         >
-          <Text style={styles.questionTitle}>{question.title}</Text>
+          <Text style={styles.questionTitle}>{decodeHtmlEntities(question.title)}</Text>
           
           {question.description && (
-            <Text style={styles.questionDescription}>{question.description}</Text>
+            <Text style={styles.questionDescription}>{decodeHtmlEntities(question.description)}</Text>
           )}
 
           {question.constr_mandatory && (

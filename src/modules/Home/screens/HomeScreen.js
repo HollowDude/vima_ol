@@ -1,12 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Alert, ScrollView, RefreshControl } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Card from '../../../core/components/Card';
 import DashboardHeader from '../../../core/components/DashboardHeader';
 import MenuItem from '../../../core/components/MenuItem';
-import SlideMenu from '../../../core/components/SlideMenu';
-import ToastContainer from '../../../core/components/ToastContainer';
-import ExpandableFAB from '../../../core/components/ExpandableFab';
+import ScreenLayout from '../../../core/components/ScreenLayout';
 import useNetwork from '../../../core/hooks/useNetwork';
 import useSyncActions from '../../../core/hooks/useSyncActions';
 import OdooService from '../../../core/api/odoo.service';
@@ -137,58 +134,48 @@ export default function HomeScreen({
     },
   ];
 
+  const fabActions = [{ icon: 'menu', onPress: () => setMenuVisible(true) }];
+
   return (
-    <SafeAreaProvider style={styles.safeArea}>
-      <View style={styles.container}>
-        <ToastContainer />
-
-        <SlideMenu
-          visible={menuVisible}
-          onClose={() => setMenuVisible(false)}
-          userData={userData}
-          username={username}
-          onLogout={handleLogout}
-          onNavigateToSyncHistory={() => {
-            setMenuVisible(false);
-            onNavigateToSyncHistory?.();
-          }}
-        />
-
-        <ExpandableFAB actions={[{ icon: 'menu', onPress: () => setMenuVisible(true) }]} />
-
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
-          refreshControl={
-            <RefreshControl 
-              refreshing={refreshing} 
-              onRefresh={handleRefresh}
-              tintColor="#64c27b" 
-              colors={['#64c27b']} 
-            />
-          }
-        >
-          <Card style={styles.mainCard}>
-            <DashboardHeader userName={username || 'Usuario'} isOnline={isOnline} />
-            <View style={styles.menuContent}>
-              {menuItems.map((item, i) => <MenuItem key={i} {...item} />)}
-            </View>
-          </Card>
-
-          <View style={styles.footer}>
-            <Text style={styles.footerText}>
-              {isOnline ? 'Conectado' : 'Modo offline'} · Última sync: {getTimeAgo(lastSync)}
-            </Text>
+    <ScreenLayout
+      userData={userData}
+      username={username}
+      onLogout={handleLogout}
+      menuVisible={menuVisible}
+      setMenuVisible={setMenuVisible}
+      fabActions={fabActions}
+      onNavigateToSyncHistory={onNavigateToSyncHistory}
+    >
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl 
+            refreshing={refreshing} 
+            onRefresh={handleRefresh}
+            tintColor="#64c27b" 
+            colors={['#64c27b']} 
+          />
+        }
+      >
+        <Card style={styles.mainCard}>
+          <DashboardHeader userName={username || 'Usuario'} isOnline={isOnline} />
+          <View style={styles.menuContent}>
+            {menuItems.map((item, i) => <MenuItem key={i} {...item} />)}
           </View>
-        </ScrollView>
-      </View>
-    </SafeAreaProvider>
+        </Card>
+
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>
+            {isOnline ? 'Conectado' : 'Modo offline'} · Última sync: {getTimeAgo(lastSync)}
+          </Text>
+        </View>
+      </ScrollView>
+    </ScreenLayout>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea:      { flex: 1, backgroundColor: '#f5f0ebff' },
-  container:     { flex: 1 },
   scrollView:    { flex: 1 },
   scrollContent: { padding: 16, paddingTop: 80, paddingBottom: 140 },
   mainCard:      { marginBottom: 16 },
