@@ -2,6 +2,7 @@ import OdooService from '../api/odoo.service';
 import StorageService from '../storage/storage.service';
 import { STORAGE_KEYS } from './sync.constants';
 import * as Pending from './sync.pending';
+import * as Clients from './sync.clients';
 import { diffAndMerge, applyIncrementalDelta } from './sync.diff';
 
 export async function syncLeads() {
@@ -98,6 +99,72 @@ export async function getLeadByTaskId(taskId) {
     });
     return associatedLead || null;
   } catch (error) {
+    return null;
+  }
+}
+
+export async function getLeadsByTaskId(taskId) {
+  try {
+    const leads = await getLocalLeads();
+    return leads.filter(lead => {
+      if (!lead.task_ids || lead.task_ids.length === 0) return false;
+      return lead.task_ids.includes(taskId);
+    });
+  } catch (error) {
+    return [];
+  }
+}
+
+/**
+ * Resuelve o crea un res.partner a partir de un lead.
+ * Opción A: solo crea partner cuando hay conexión (evita IDs temporales offline).
+ *
+ * @param {Object} lead - El lead con sus campos sincronizados
+ * @param {Object} options
+ * @param {boolean} options.isOnline - Si hay conexión a internet
+ * @returns {Promise<{id: number, name: string, created: boolean}|null>}
+ *   null si no hay conexión y el lead no tiene partner vinculado.
+ */
+export async function resolveOrCreatePartnerForLead(lead, { isOnline = false } = {}) {
+  try {
+    // Si el lead ya tiene partner vinculado, usarlo directamente
+    if (lead.partner_id && Array.isArray(lead.partner_id) && lead.partner_id[0]) {
+      return { id: lead.partner_id[0], name: lead.partner_id[1] || '', created: false };
+    }
+
+    if (!isOnline) {
+      // Opción A: no podemos crear partner sin conexión
+      return null;
+    }
+
+    // Construir datos del partner desde los campos del lead
+    const partnerData = {
+      name: lead.partner_name || lead.contact_name || lead.name || 'Sin nombre',
+      email: lead.email_from || '',
+      phone: lead.phone || '',
+      mobile: lead.mobile || '',
+      street: lead.street || '',
+      street2: lead.street2 || '',
+      country_id: Array.isArray(lead.country_id) ? lead.country_id[0] : lead.country_id || false,
+      state_id: Array.isArray(lead.state_id) ? lead.state_id[0] : lead.state_id || false,
+      user_id: Array.isArray(lead.user_id) ? lead.user_id[0] : lead.user_id || OdooService.uid,
+      company_type: 'person',
+    };
+
+    // Crear partner directamente en Odoo (estamos online)
+    const realId = await OdooService.create('res.partner', partnerData);
+
+    // Guardar localmente sin encolar pendiente (ya existe en Odoo)
+    await Clients.updateClientLocally(realId, partnerData, { noPending: true });
+
+    // Actualizar el lead local con el nuevo partner_id
+    await updateLeadLocally(lead.id, {
+      partner_id: [realId, partnerData.name],
+    }, { noPending: true });
+
+    return { id: realId, name: partnerData.name, created: true };
+  } catch (error) {
+    console.error(' Error resolviendo partner para lead:', error);
     return null;
   }
 }
@@ -276,4 +343,6 @@ export default {
   associateTaskToLead,
   getLeadsStatsByStage,
   getLeadByTaskId,
+  getLeadsByTaskId,
+  resolveOrCreatePartnerForLead,
 };

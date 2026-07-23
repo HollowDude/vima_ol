@@ -7,8 +7,11 @@ import { Feather } from '@expo/vector-icons';
 import SyncService from '../sync/sync.service';
 import useNetwork from '../hooks/useNetwork';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
-import SelectionModal from './SelectionModal';
+import ContactPickerModal from './ContactPickerModal';
+import ContactTypeBadge from './ContactTypeBadge';
 import SimpleDateTimePicker from './SimpleDateTimePicker';
+
+const FEATURE_MULTI_CONTACT_BACKEND_READY = false;
 
 // Format date to Odoo format - usa toISOString como en el resto de la app
 function formatLocalDate(dateObj) {
@@ -63,10 +66,11 @@ export default function CreateTaskModal({
   const [managementTags, setManagementTags] = useState([]);
   const [availableTags, setAvailableTags] = useState([]);
 
-  // ✅ Solo clientes propios para asignación
+  // ✅ Contactos multi-tipo
   const [clients, setClients] = useState([]);
-  const [selectedClient, setSelectedClient] = useState(null);
-  const [showClientModal, setShowClientModal] = useState(false);
+  const [leads, setLeads] = useState([]);
+  const [selectedContacts, setSelectedContacts] = useState([]);
+  const [showContactPicker, setShowContactPicker] = useState(false);
 
   const descriptionShake = useRef(new Animated.Value(0)).current;
 
@@ -83,22 +87,34 @@ export default function CreateTaskModal({
     setSelectedDate(new Date());
     setSelectedPriority('media');
     setManagementTags([]);
-    if (!partnerId) setSelectedClient(null);
+    if (!partnerId) {
+      setSelectedContacts([]);
+    } else {
+      // Si hay partnerId pre-seleccionado, restaurarlo como contacto inicial
+      const existingClient = clients.find(c => c.id === partnerId);
+      if (existingClient && selectedContacts.length === 0) {
+        setSelectedContacts([{ type: 'client', id: partnerId, raw: existingClient, name: existingClient.name }]);
+      }
+    }
   };
 
   const loadData = async () => {
     try {
-      const [tags, ownClients] = await Promise.all([
+      const [tags, ownClients, ownLeads] = await Promise.all([
         SyncService.getManagementTags(),
-        SyncService.getOwnClients(),   // ✅ Solo propios
+        SyncService.getOwnClients(),
+        SyncService.getOwnLeads(),
       ]);
       
       setAvailableTags(tags);
       setClients(ownClients);
+      setLeads(ownLeads);
       
-      if (partnerId && ownClients.length > 0) {
+      if (partnerId && ownClients.length > 0 && selectedContacts.length === 0) {
         const preselectedClient = ownClients.find(c => c.id === partnerId);
-        if (preselectedClient) setSelectedClient(preselectedClient);
+        if (preselectedClient) {
+          setSelectedContacts([{ type: 'client', id: partnerId, raw: preselectedClient, name: preselectedClient.name }]);
+        }
       }
     } catch (e) {
       console.error('Error cargando datos iniciales:', e);
@@ -118,8 +134,10 @@ export default function CreateTaskModal({
       return;
     }
 
-    if (!hideClientSelector && !partnerId && !selectedClient) {
-      Alert.alert("Error", "Debes seleccionar un cliente");
+    // Validar contactos
+    const hasContacts = selectedContacts.length > 0 || !!partnerId;
+    if (!hideClientSelector && !hasContacts) {
+      Alert.alert("Error", "Debes seleccionar al menos un cliente u oportunidad");
       return;
     }
 
@@ -163,27 +181,60 @@ export default function CreateTaskModal({
     // Usar formato local sin conversión a UTC
     const dateStr = formatLocalDate(selectedDate);
 
-    let finalPartnerId = partnerId; 
-    let clientName = selectedClient?.name || '';
-    
-    if (!finalPartnerId && selectedClient) {
-      finalPartnerId = selectedClient.id; 
-      clientName = selectedClient.name || '';
+    // ── Resolver contactos ─────────────────────────────────────────────
+    // Separar clientes y leads de los contactos seleccionados
+    const clientContacts = selectedContacts.filter(c => c.type === 'client');
+    const leadContacts = selectedContacts.filter(c => c.type === 'lead');
+
+    const resolvedPartnerIds = [];
+
+    // Resolver clientes directos
+    for (const contact of clientContacts) {
+      resolvedPartnerIds.push(contact.id);
     }
-    
-    // Si no hay cliente seleccionado pero viene de props, buscar el nombre
+
+    // Resolver leads → partners (online = crear, offline = avisar)
+    const unresolvedLeads = [];
+    for (const contact of leadContacts) {
+      const result = await SyncService.resolveOrCreatePartnerForLead(contact.raw, { isOnline });
+      if (result) {
+        resolvedPartnerIds.push(result.id);
+      } else {
+        unresolvedLeads.push(contact);
+      }
+    }
+
+    if (unresolvedLeads.length > 0) {
+      const names = unresolvedLeads.map(l => l.name).join(', ');
+      Alert.alert(
+        'Sin conexión',
+        `La${unresolvedLeads.length > 1 ? 's' : ''} oportunidad${unresolvedLeads.length > 1 ? 'es' : ''} ${names} no tiene contacto vinculado.\n\nNecesitas conexión para vincularla la primera vez.\n\nLa tarea se creará igual sin incluir esa${unresolvedLeads.length > 1 ? 's' : ''} oportunidad${unresolvedLeads.length > 1 ? 'es' : ''}.`
+      );
+    }
+
+    // Determinar partner_id principal (primer contacto resuelto)
+    let finalPartnerId = partnerId;
+    let clientName = '';
+
+    if (resolvedPartnerIds.length > 0) {
+      finalPartnerId = resolvedPartnerIds[0];
+      // Buscar nombre
+      const firstContact = selectedContacts.find(c => c.id === resolvedPartnerIds[0] || 
+        (c.type === 'lead' && clientContacts.length === 0 && leadContacts.length > 0));
+      if (firstContact) clientName = firstContact.name;
+    }
+
     if (!finalPartnerId && partnerId) {
       finalPartnerId = partnerId;
-      // Buscar nombre en la lista de clientes disponibles
       const foundClient = clients.find(c => c.id === partnerId);
       clientName = foundClient?.name || '';
     }
-    
+
     if (!finalPartnerId) {
-      // Cliente actual (usuario logueado)
+      // Fallback: usuario logueado como último recurso
       const currentUserData = await SyncService.getCurrentUser();
       finalPartnerId = currentUserData[0].partner_id[0];
-      clientName = ''; // No mostraremos nombre para el propio usuario
+      clientName = '';
     }
 
     let userIdValue;
@@ -217,8 +268,22 @@ export default function CreateTaskModal({
       parent_id: false,
     };
 
+    // Agregar multi-contacto si el backend lo soporta
+    if (FEATURE_MULTI_CONTACT_BACKEND_READY && resolvedPartnerIds.length > 0) {
+      newTaskData.task_contact_ids = [[6, 0, resolvedPartnerIds]];
+    }
+
     try {
       const createdTask = await SyncService.createTaskLocally(newTaskData);
+      
+      // Asociar leads a la tarea
+      for (const contact of leadContacts) {
+        try {
+          await SyncService.associateTaskToLead(contact.id, createdTask.id);
+        } catch (assocError) {
+          console.warn('Error asociando lead a tarea:', assocError);
+        }
+      }
       
       // Si hay conexión, intentar sincronizar inmediatamente
       if (isOnline) {
@@ -277,34 +342,61 @@ export default function CreateTaskModal({
             />
           </View>
 
-          {!hideClientSelector && !partnerId && (
+          {!hideClientSelector && (
             <View style={styles.field}>
-              <Text style={styles.label}>Cliente <Text style={styles.required}>*</Text></Text>
-              <TouchableOpacity 
-                style={styles.selectorButton} 
-                onPress={() => setShowClientModal(true)}
-              >
-                <View style={styles.selectorContent}>
-                  <Feather name="users" size={20} color="#64c27b" />
-                  <Text style={[styles.selectorText, !selectedClient && styles.placeholderText]}>
-                    {selectedClient ? selectedClient.name : "Seleccionar cliente..."}
-                  </Text>
+              <Text style={styles.label}>Contactos <Text style={styles.required}>*</Text></Text>
+              
+              {selectedContacts.length === 0 && !partnerId ? (
+                <TouchableOpacity
+                  style={styles.selectorButton}
+                  onPress={() => setShowContactPicker(true)}
+                >
+                  <View style={styles.selectorContent}>
+                    <Feather name="users" size={20} color="#64c27b" />
+                    <Text style={[styles.selectorText, styles.placeholderText]}>
+                      Seleccionar cliente u oportunidad...
+                    </Text>
+                  </View>
+                  <Feather name="chevron-down" size={20} color="#9CA3AF" />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={styles.selectorButton}
+                  onPress={() => setShowContactPicker(true)}
+                >
+                  <View style={styles.selectorContent}>
+                    <Feather name="users" size={20} color="#64c27b" />
+                    <Text style={styles.selectorText}>
+                      {selectedContacts.length > 0
+                        ? `${selectedContacts.length} contacto${selectedContacts.length !== 1 ? 's' : ''} seleccionado${selectedContacts.length !== 1 ? 's' : ''}`
+                        : 'Seleccionar contactos...'}
+                    </Text>
+                  </View>
+                  <Feather name="chevron-down" size={20} color="#9CA3AF" />
+                </TouchableOpacity>
+              )}
+              
+              {/* Chips de contactos seleccionados */}
+              {selectedContacts.length > 0 && (
+                <View style={styles.contactChipsContainer}>
+                  {selectedContacts.map((contact) => (
+                    <View key={`${contact.type}-${contact.id}`} style={styles.contactChip}>
+                      <ContactTypeBadge type={contact.type} compact />
+                      <Text style={styles.contactChipText} numberOfLines={1}>
+                        {contact.name}
+                      </Text>
+                      <TouchableOpacity
+                        onPress={() => {
+                          setSelectedContacts(prev => prev.filter(c => !(c.type === contact.type && c.id === contact.id)));
+                        }}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Feather name="x" size={14} color="#6B7280" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
                 </View>
-                <Feather name="chevron-down" size={20} color="#9CA3AF" />
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {partnerId && selectedClient && (
-            <View style={styles.field}>
-              <Text style={styles.label}>Cliente</Text>
-              <View style={styles.preselectedClient}>
-                <Feather name="users" size={20} color="#64c27b" />
-                <Text style={styles.preselectedClientText}>{selectedClient.name}</Text>
-                <View style={styles.preselectedBadge}>
-                  <Text style={styles.preselectedBadgeText}>Preseleccionado</Text>
-                </View>
-              </View>
+              )}
             </View>
           )}
 
@@ -420,17 +512,18 @@ export default function CreateTaskModal({
           </View>
         </KeyboardAwareScrollView>
 
-        {!hideClientSelector && !partnerId && (
-          <SelectionModal
-            visible={showClientModal}
-            title="Seleccionar Cliente"
-            data={clients}
-            onSelect={(client) => {
-              setSelectedClient(client);
-              setShowClientModal(false);
+        {!hideClientSelector && (
+          <ContactPickerModal
+            visible={showContactPicker}
+            title="Seleccionar Contactos"
+            clients={clients}
+            leads={leads}
+            selectedKeys={selectedContacts.map(c => `${c.type}-${c.id}`)}
+            onConfirm={(selected) => {
+              setSelectedContacts(selected);
+              setShowContactPicker(false);
             }}
-            onClose={() => setShowClientModal(false)}
-            selectedIds={selectedClient ? [selectedClient.id] : []}
+            onClose={() => setShowContactPicker(false)}
           />
         )}
 
@@ -467,14 +560,14 @@ const styles = StyleSheet.create({
   descriptionCharCount: { fontSize: 11, color: '#9CA3AF' },
   descriptionCharCountWarn: { color: '#F59E0B', fontWeight: '600' },
   descriptionFooterNote: { fontSize: 11, color: '#9CA3AF', fontStyle: 'italic', marginLeft: 15, marginRight: 12 },
-  preselectedClient: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f0fdf4', padding: 14, borderRadius: 8, borderWidth: 1, borderColor: '#86efac', gap: 12 },
-  preselectedClientText: { flex: 1, fontSize: 15, color: '#15803d', fontWeight: '600' },
-  preselectedBadge: { backgroundColor: '#10B981', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
-  preselectedBadgeText: { fontSize: 10, fontWeight: '700', color: '#fff', textTransform: 'uppercase' },
+
   selectorButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', padding: 14, borderRadius: 8, borderWidth: 1, borderColor: '#D1D5DB' },
   selectorContent: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12 },
   selectorText: { fontSize: 15, color: '#111827', fontWeight: '500', flex: 1 },
   placeholderText: { color: '#9CA3AF', fontWeight: 'normal' },
+  contactChipsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  contactChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f9fafb', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', gap: 6 },
+  contactChipText: { fontSize: 13, color: '#374151', fontWeight: '500', maxWidth: 150 },
   rangeInfo: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f0fdf4', padding: 10, borderRadius: 8, marginBottom: 12, gap: 8 },
   rangeInfoText: { flex: 1, fontSize: 12, color: '#15803d', fontWeight: '500' },
   datePickerButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', padding: 14, borderRadius: 8, borderWidth: 1, borderColor: '#D1D5DB' },

@@ -157,6 +157,25 @@ export async function getClientById(clientId) {
   return clients.find(c => c.id === clientId) || null;
 }
 
+/**
+ * Crea un cliente localmente y encola la creación pendiente.
+ */
+export async function createClientLocally(clientData = {}) {
+  try {
+    const tempId = -Math.floor(Math.random() * 1000000);
+    const nowIso = new Date().toISOString();
+    const client = { id: tempId, ...clientData, active: true, create_date: nowIso, write_date: nowIso };
+    const clients = (await StorageService.getItem(STORAGE_KEYS.CLIENTS)) || [];
+    clients.push(client);
+    await StorageService.setItem(STORAGE_KEYS.CLIENTS, clients);
+    await Pending.addPendingChange('res.partner', tempId, { ...clientData, _is_creation: true });
+    return client;
+  } catch (error) {
+    console.error(' Error creando cliente localmente:', error);
+    throw error;
+  }
+}
+
 export default {
   syncClients,
   getLocalClients,
@@ -166,4 +185,5 @@ export default {
   getLastSyncDate,
   updateClientLocally,
   getClientById,
+  createClientLocally,
 };

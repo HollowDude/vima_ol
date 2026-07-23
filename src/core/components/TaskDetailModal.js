@@ -14,6 +14,10 @@ import StateSelectorModal from './StateSelectorModal';
 import CommentsSection from './CommentsSection';
 import AttachmentsModal from './AttachmentsModal';
 import SimpleDateTimePicker from './SimpleDateTimePicker';
+import ContactPickerModal from './ContactPickerModal';
+import ContactTypeBadge from './ContactTypeBadge';
+
+const FEATURE_MULTI_CONTACT_BACKEND_READY = false;
 import useNetwork from '../hooks/useNetwork';
 import { clientHasGeolocation } from '../utils/clientGeoHelper';
 import { isTaskClosed } from '../utils/taskStatusHelper';
@@ -86,8 +90,10 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
   const [pendingStateChange, setPendingStateChange] = useState(null);
 
   const [showAttachmentsModal, setShowAttachmentsModal] = useState(false);
-  const [associatedLead, setAssociatedLead] = useState(null);
-  const [showLeadModal, setShowLeadModal] = useState(false);
+  const [associatedLeads, setAssociatedLeads] = useState([]);
+  const [showAddContact, setShowAddContact] = useState(false);
+  const [allClients, setAllClients] = useState([]);
+  const [allLeads, setAllLeads] = useState([]);
   
   const [attachmentsCount, setAttachmentsCount] = useState(0);
   const [loadingAttachments, setLoadingAttachments] = useState(false);
@@ -115,7 +121,7 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
   useEffect(() => {
     if (task) {
       checkIfUserOwnTask();
-      loadAssociatedLead();
+      loadAssociatedLeads();
       loadAttachmentsCount();
       loadAssociatedClient();
     }
@@ -147,13 +153,22 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
     }
   }, [visible, task]);
 
-  const loadAssociatedLead = async () => {
+  const loadAssociatedLeads = async () => {
     if (!task?.id) return;
     try {
-      const lead = await SyncService.getLeadByTaskId(task.id);
-      setAssociatedLead(lead);
-    } catch { setAssociatedLead(null); }
+      const leads = await SyncService.getLeadsByTaskId(task.id);
+      setAssociatedLeads(leads);
+      const [ownClients, ownLeads] = await Promise.all([
+        SyncService.getOwnClients(),
+        SyncService.getOwnLeads(),
+      ]);
+      setAllClients(ownClients);
+      // Excluir leads ya asociados
+      const associatedIds = new Set(leads.map(l => l.id));
+      setAllLeads(ownLeads.filter(l => !associatedIds.has(l.id)));
+    } catch { setAssociatedLeads([]); }
   };
+
 
   const loadAttachmentsCount = async () => {
     if (!task?.id) return;
@@ -620,18 +635,25 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
               </TouchableOpacity>
             </View>
 
-            {associatedLead && (
-              <TouchableOpacity 
-                style={styles.leadTag} 
-                onPress={() => onNavigateToLeads ? onNavigateToLeads() : setShowLeadModal(true)} 
-                activeOpacity={0.7}
-              >
-                <View style={styles.leadTagLeft}>
-                  <Feather name="briefcase" size={14} color="#3B82F6" />
-                  <Text style={styles.leadTagText}>Oportunidad: {associatedLead.name}</Text>
-                </View>
-                <Feather name={onNavigateToLeads ? "chevron-right" : "external-link"} size={14} color="#3B82F6" />
-              </TouchableOpacity>
+            {associatedLeads.length > 0 && (
+              <View style={styles.leadsSection}>
+                {associatedLeads.map((lead) => (
+                  <TouchableOpacity
+                    key={lead.id}
+                    style={styles.leadTag}
+                    onPress={() => onNavigateToLeads ? onNavigateToLeads() : {}}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.leadTagLeft}>
+                      <Feather name="briefcase" size={14} color="#3B82F6" />
+                      <Text style={styles.leadTagText}>Oportunidad: {lead.name}</Text>
+                    </View>
+                    {onNavigateToLeads && (
+                      <Feather name="chevron-right" size={14} color="#3B82F6" />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
             )}
 
             {taskTags.length > 0 && (
@@ -722,7 +744,7 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
 
             {/* ── Datos de la tarea ── */}
             <Text style={styles.sectionTitle}>Datos de la Tarea</Text>
-            <InfoRow icon="user"     label="Cliente"  value={Array.isArray(task.partner_id) ? task.partner_id[1] : '-'} />
+            <InfoRow icon="user" label="Cliente" value={Array.isArray(task.partner_id) ? task.partner_id[1] : '-'} />
             {clientMissingGeo && (
               <TouchableOpacity style={styles.missingGeolocBanner} onPress={() => onNavigateToClients && onNavigateToClients(Array.isArray(task.partner_id) ? task.partner_id[0] : task.partner_id)} activeOpacity={0.8}>
                 <View style={styles.missingGeolocLeft}>
@@ -738,6 +760,32 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
                 </View>
               </TouchableOpacity>
             )}
+            {associatedLeads.length > 0 && (
+              <View style={styles.additionalContacts}>
+                {associatedLeads.map((lead) => (
+                  <TouchableOpacity
+                    key={lead.id}
+                    style={styles.contactRow}
+                    onPress={() => onNavigateToLeads ? onNavigateToLeads() : {}}
+                    activeOpacity={0.7}
+                  >
+                    <ContactTypeBadge type="lead" compact />
+                    <Text style={styles.contactRowText} numberOfLines={1}>{lead.name}</Text>
+                    {onNavigateToLeads && (
+                      <Feather name="chevron-right" size={14} color="#9CA3AF" />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+            <TouchableOpacity
+              style={styles.addContactButton}
+              onPress={() => setShowAddContact(true)}
+              activeOpacity={0.7}
+            >
+              <Feather name="plus" size={14} color="#64c27b" />
+              <Text style={styles.addContactButtonText}>Agregar contacto</Text>
+            </TouchableOpacity>
             <InfoRow icon="briefcase" label="Proyecto" value={Array.isArray(task.project_id) ? task.project_id[1] : '-'} />
 
             <View style={styles.divider} />
@@ -954,6 +1002,64 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
               <CommentsSection taskId={task.id} visible={visible} />
             </View>
 
+            <ContactPickerModal
+              visible={showAddContact}
+              title="Agregar Contacto"
+              clients={allClients}
+              leads={allLeads}
+              selectedKeys={[]}
+              onConfirm={async (selected) => {
+                setShowAddContact(false);
+                const leadContacts = selected.filter(c => c.type === 'lead');
+                const clientContacts = selected.filter(c => c.type === 'client');
+                const resolved = [];
+
+                for (const contact of clientContacts) {
+                  resolved.push(contact.id);
+                }
+
+                const unresolved = [];
+                for (const contact of leadContacts) {
+                  const result = await SyncService.resolveOrCreatePartnerForLead(contact.raw, { isOnline });
+                  if (result) {
+                    resolved.push(result.id);
+                  } else {
+                    unresolved.push(contact);
+                  }
+                }
+
+                if (unresolved.length > 0) {
+                  Alert.alert(
+                    'Sin conexión',
+                    `No se pudo vincular ${unresolved.map(l => l.name).join(', ')}. Necesitas conexión.`
+                  );
+                }
+
+                // Asociar leads a la tarea
+                for (const contact of leadContacts) {
+                  try {
+                    await SyncService.associateTaskToLead(contact.id, task.id);
+                  } catch (e) {
+                    console.warn('Error asociando lead:', e);
+                  }
+                }
+
+                if (FEATURE_MULTI_CONTACT_BACKEND_READY && resolved.length > 0) {
+                  try {
+                    await SyncService.updateTaskLocally(task.id, {
+                      task_contact_ids: [[4, ...resolved]],
+                    }, { noPending: true });
+                  } catch (e) {
+                    console.warn('Error actualizando task_contact_ids:', e);
+                  }
+                }
+
+                await loadAssociatedLeads();
+                if (onTaskUpdated) onTaskUpdated({ keepModalOpen: true });
+              }}
+              onClose={() => setShowAddContact(false)}
+            />
+
             <AttachmentsModal
               visible={showAttachmentsModal}
               taskId={task.id}
@@ -1029,10 +1135,24 @@ const styles = StyleSheet.create({
   leadTag: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     backgroundColor: '#EFF6FF', paddingVertical: 10, paddingHorizontal: 14,
-    borderRadius: 10, marginBottom: 12, borderWidth: 1, borderColor: '#BFDBFE',
+    borderRadius: 10, marginBottom: 8, borderWidth: 1, borderColor: '#BFDBFE',
   },
   leadTagLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 8 },
   leadTagText: { fontSize: 13, fontWeight: '600', color: '#3B82F6', flex: 1 },
+
+  leadsSection: { marginBottom: 12 },
+  additionalContacts: { marginTop: 4, marginBottom: 8, gap: 4 },
+  contactRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 8, paddingHorizontal: 12,
+    backgroundColor: '#F9FAFB', borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB',
+  },
+  contactRowText: { flex: 1, fontSize: 13, color: '#374151', fontWeight: '500' },
+  addContactButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingVertical: 6, marginBottom: 4,
+  },
+  addContactButtonText: { fontSize: 13, fontWeight: '600', color: '#64c27b' },
 
   tagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
   tagChip: {

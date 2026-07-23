@@ -259,8 +259,8 @@ class SyncService {
   async getLastSyncDate() { return Clients.getLastSyncDate(); }
   async updateClientLocally(clientId, updates, opts) { return Clients.updateClientLocally(clientId, updates, opts); }
   async getClientById(clientId) { return Clients.getClientById(clientId); }
+  async createClientLocally(clientData) { return Clients.createClientLocally(clientData); }
 
-  // Leads
   // Leads
   async syncLeads() { return Leads.syncLeads(); }
   async getLocalLeads() { return Leads.getLocalLeads(); }
@@ -273,6 +273,8 @@ class SyncService {
   async associateTaskToLead(leadId, taskId) { return Leads.associateTaskToLead(leadId, taskId); }
   async getLeadsStatsByStage() { return Leads.getLeadsStatsByStage(); }
   async getLeadByTaskId(taskId) { return Leads.getLeadByTaskId(taskId); }
+  async getLeadsByTaskId(taskId) { return Leads.getLeadsByTaskId(taskId); }
+  async resolveOrCreatePartnerForLead(lead, options) { return Leads.resolveOrCreatePartnerForLead(lead, options); }
 
   // Utilidades
   sanitizeForOdoo(data) { return Utils.sanitizeForOdoo(data); }
