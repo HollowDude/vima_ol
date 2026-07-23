@@ -8,6 +8,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import Slider from '@react-native-community/slider';
 import SyncService from '../sync/sync.service';
 import { decodeHtmlEntities } from '../sync/sync.utils';
+import { isTaskClosed } from '../utils/taskStatusHelper';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -611,7 +612,7 @@ function QuestionCard({
   );
 }
 
-export default function SurveyModal({ visible, taskId, surveyId, relationId, onClose, onComplete }) {
+export default function SurveyModal({ visible, taskId, taskState, surveyId, relationId, onClose, onComplete }) {
   const [loading, setLoading] = useState(true);
   const [survey, setSurvey] = useState(null);
   const [questions, setQuestions] = useState([]);
@@ -628,6 +629,12 @@ export default function SurveyModal({ visible, taskId, surveyId, relationId, onC
   const loadSurvey = async () => {
     try {
       setLoading(true);
+
+      if (isTaskClosed(taskState)) {
+        Alert.alert('Encuesta no disponible', 'Esta encuesta no se puede responder porque la tarea asociada ya está cerrada.');
+        onClose();
+        return;
+      }
 
       // Obtener survey completo con user_input
       const surveys = await SyncService.getSurveysForTask(taskId);
@@ -734,6 +741,14 @@ export default function SurveyModal({ visible, taskId, surveyId, relationId, onC
 
   const handleComplete = async () => {
     try {
+      const { tasks: freshTasks } = await SyncService.getAllVisibleTasks();
+      const freshTask = freshTasks.find(t => t.id === taskId);
+      if (freshTask && isTaskClosed(freshTask.state)) {
+        Alert.alert('Encuesta no disponible', 'Esta encuesta no se puede completar porque la tarea asociada ya está cerrada.');
+        onClose();
+        return;
+      }
+
       const unansweredRequired = questions.filter(q => {
         if (!q.constr_mandatory) return false;
         const answer = answers[q.id];

@@ -2,6 +2,7 @@ import OdooService from '../api/odoo.service';
 import StorageService from '../storage/storage.service';
 import { STORAGE_KEYS } from './sync.constants';
 import * as Pending from './sync.pending';
+import { diffAndMerge, applyIncrementalDelta } from './sync.diff';
 
 export async function syncLeads() {
   try {
@@ -12,12 +13,17 @@ export async function syncLeads() {
     } catch (pendingError) {
     }
 
-    // ✅ Se descargan TODOS los leads activos (sin filtro por user_id)
+    const syncStartedAt = new Date(Date.now() - 10_000).toISOString();
+    const lastSync = await StorageService.getItem(STORAGE_KEYS.LAST_SYNC_LEADS);
+    const isIncremental = !!lastSync;
+
+    const domain = isIncremental
+      ? ['|', ['active', '=', true], ['active', '=', false], ['write_date', '>', lastSync]]
+      : [['active', '=', true]];
+
     const leads = await OdooService.searchRead(
       'crm.lead',
-      [
-        ['active', '=', true]
-      ],
+      domain,
       [
         'id', 'name', 'partner_id', 'user_id', 'stage_id',
         'expected_revenue', 'probability', 'date_deadline',
@@ -34,10 +40,19 @@ export async function syncLeads() {
       1000
     );
 
-    await StorageService.setItem(STORAGE_KEYS.LEADS, leads);
-    console.log('✅ Leads sincronizados:', leads.length);
+    const previous = (await StorageService.getItem(STORAGE_KEYS.LEADS)) || [];
+    const pending = (await StorageService.getItem(STORAGE_KEYS.PENDING_CHANGES)) || [];
+    const protectedIds = new Set(pending.filter(p => p.model === 'crm.lead').map(p => p.recordId));
+
+    const { merged, stats } = isIncremental
+      ? applyIncrementalDelta(previous, leads, protectedIds)
+      : diffAndMerge(previous, leads, protectedIds);
+
+    await StorageService.setItem(STORAGE_KEYS.LEADS, merged);
+    await StorageService.setItem(STORAGE_KEYS.LAST_SYNC_LEADS, syncStartedAt);
+    console.log('✅ Leads sincronizados:', merged.length, `(creados: ${stats.created}, actualizados: ${stats.updated})`);
     
-    return leads;
+    return { leads: merged, stats };
   } catch (error) {
     console.error('❌ Error sincronizando leads:', error);
     throw error;

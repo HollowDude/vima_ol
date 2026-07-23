@@ -35,6 +35,7 @@ export default function RootNavigator({ sharedProps, onUnauthorized }) {
               {...sharedProps}
               onBack={() => props.navigation.goBack()}
               onNavigateToLeads={() => props.navigation.navigate('Leads')}
+              onNavigateToClients={(clientId) => props.navigation.navigate('Clients', { openClientId: clientId })}
               onNavigateToSyncHistory={() => props.navigation.navigate('SyncHistory')}
               onUnauthorized={onUnauthorized}
             />
@@ -48,6 +49,7 @@ export default function RootNavigator({ sharedProps, onUnauthorized }) {
               onBack={() => props.navigation.goBack()}
               onNavigateToSyncHistory={() => props.navigation.navigate('SyncHistory')}
               onUnauthorized={onUnauthorized}
+              openClientId={props.route?.params?.openClientId}
             />
           )}
         </Stack.Screen>

@@ -15,6 +15,8 @@ import CommentsSection from './CommentsSection';
 import AttachmentsModal from './AttachmentsModal';
 import SimpleDateTimePicker from './SimpleDateTimePicker';
 import useNetwork from '../hooks/useNetwork';
+import { clientHasGeolocation } from '../utils/clientGeoHelper';
+import { isTaskClosed } from '../utils/taskStatusHelper';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const MODAL_HEIGHT = SCREEN_HEIGHT * 0.85;
@@ -59,7 +61,7 @@ const formatForOdoo = (dateObj) => {
   return dateObj.toISOString().replace('T', ' ').split('.')[0];
 };
 
-export default function TaskDetailModal({ visible, task, allTasks, isHistorical = false, onClose, onTaskUpdated, onNavigateToLeads }) {
+export default function TaskDetailModal({ visible, task, allTasks, isHistorical = false, onClose, onTaskUpdated, onNavigateToLeads, onNavigateToClients }) {
   const { isOnline } = useNetwork();
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const panY = useRef(new Animated.Value(0)).current;
@@ -94,6 +96,7 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [savingDescription, setSavingDescription] = useState(false);
+  const [associatedClient, setAssociatedClient] = useState(null);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -114,6 +117,7 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
       checkIfUserOwnTask();
       loadAssociatedLead();
       loadAttachmentsCount();
+      loadAssociatedClient();
     }
   }, [task]);
 
@@ -183,6 +187,15 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
     maxDate.setHours(23, 59, 59, 999);
 
     return { minDate, maxDate };
+  };
+
+  const loadAssociatedClient = async () => {
+    if (!task?.partner_id) return;
+    const partnerId = Array.isArray(task.partner_id) ? task.partner_id[0] : task.partner_id;
+    try {
+      const client = await SyncService.getClientById(partnerId);
+      setAssociatedClient(client);
+    } catch { setAssociatedClient(null); }
   };
 
   const loadSurveys = async () => {
@@ -288,20 +301,27 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
       setEditingDescription(false);
       if (onTaskUpdated) onTaskUpdated({ keepModalOpen: true });
     } catch (e) {
+      if (e.code === 'CLIENT_NO_GEOLOCATION') { showGeoBlockedAlert(e.clientId); return; }
       Alert.alert("Error", "No se pudo guardar la descripción");
     } finally { setSavingDescription(false); }
   };
 
   const handleOpenSurvey = (survey) => {
     if (isHistorical) return;
-    
+
     if (survey.isCompleted) {
       setSurveyToView({ surveyId: survey.id, relationId: survey.relation_id, title: survey.title });
       setShowSurveyResponses(true);
-    } else {
-      setSelectedSurvey({ surveyId: survey.id, relationId: survey.relation_id });
-      setShowSurveyModal(true);
+      return;
     }
+
+    if (isTaskClosed(task.state)) {
+      Alert.alert('Encuesta no disponible', 'Esta encuesta no se puede responder porque la tarea asociada ya está cerrada.');
+      return;
+    }
+
+    setSelectedSurvey({ surveyId: survey.id, relationId: survey.relation_id });
+    setShowSurveyModal(true);
   };
 
   const handleCompleteTask = async () => {
@@ -320,7 +340,9 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
       }
       if (onTaskUpdated) onTaskUpdated();
       closeModal();
-    } catch { Alert.alert('Error', 'No se pudo completar la tarea.'); }
+    } catch (e) {
+      if (e?.code === 'CLIENT_NO_GEOLOCATION') { showGeoBlockedAlert(e.clientId); return; }
+      Alert.alert('Error', 'No se pudo completar la tarea.'); }
   };
 
   const promptAddDescriptionThenComplete = () => {
@@ -416,7 +438,9 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
       setReprogramming(false);
       setReason('');
       if (onTaskUpdated) onTaskUpdated();
-    } catch { Alert.alert("Error", "No se pudo reprogramar"); }
+    } catch (e) {
+      if (e?.code === 'CLIENT_NO_GEOLOCATION') { showGeoBlockedAlert(e.clientId); return; }
+      Alert.alert("Error", "No se pudo reprogramar"); }
   };
 
   const showStateChangeOptions = () => {
@@ -445,7 +469,9 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
         Alert.alert('✓ Estado actualizado (offline)', 'El cambio se sincronizará cuando recuperes la conexión.');
       }
       if (onTaskUpdated) onTaskUpdated();
-    } catch { Alert.alert('Error', 'No se pudo actualizar el estado de la tarea.'); }
+    } catch (e) {
+      if (e?.code === 'CLIENT_NO_GEOLOCATION') { showGeoBlockedAlert(e.clientId); return; }
+      Alert.alert('Error', 'No se pudo actualizar el estado de la tarea.'); }
   };
 
   const handleSurveyComplete = async () => {
@@ -453,11 +479,23 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
     await loadSurveys();
   };
 
+  const showGeoBlockedAlert = (clientId) => {
+    Alert.alert(
+      'Falta ubicación del cliente',
+      'No se puede modificar esta tarea porque el cliente no tiene una ubicación registrada. Por favor, registra la geolocalización del cliente primero.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Ir al cliente', onPress: () => onNavigateToClients && onNavigateToClients(clientId) },
+      ]
+    );
+  };
+
   const statusInfo   = getStatusInfo();
   const priorityInfo = getPriorityInfo();
   const taskTags     = getTagNames();
   const { minDate, maxDate } = getReprogrammingRange();
   const completeButtonBlocked = !taskHasDescription && task.state !== '1_done';
+  const clientMissingGeo = task?.partner_id && !clientHasGeolocation(associatedClient);
 
   const displayDeadline = task.date_deadline
     ? parseOdooDate(task.date_deadline).toLocaleString('es-ES', {
@@ -492,6 +530,7 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
           <SurveyModal
             visible={showSurveyModal}
             taskId={task.id}
+            taskState={task.state}
             surveyId={selectedSurvey.surveyId}
             relationId={selectedSurvey.relationId}
             onClose={() => setShowSurveyModal(false)}
@@ -638,7 +677,9 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
                 </View>
 
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.surveyListContent}>
-                  {taskSurveys.map((survey, index) => (
+                  {taskSurveys.map((survey, index) => {
+                    const isSurveyBlocked = isTaskClosed(task.state) && !survey.isCompleted;
+                    return (
                     <View
                       key={survey.relation_id || `${survey.id}-${index}`}
                       style={styles.surveyCardWrapper}
@@ -647,16 +688,16 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
                         style={[
                           styles.surveyCard,
                           survey.isCompleted ? styles.surveyCardDone : styles.surveyCardPending,
-                          isHistorical && styles.surveyCardDisabled,
+                          (isHistorical || isSurveyBlocked) && styles.surveyCardDisabled,
                         ]}
-                        onPress={isHistorical ? undefined : () => handleOpenSurvey(survey)}
-                        activeOpacity={isHistorical ? 1 : 0.7}
+                        onPress={(isHistorical || isSurveyBlocked) ? undefined : () => handleOpenSurvey(survey)}
+                        activeOpacity={(isHistorical || isSurveyBlocked) ? 1 : 0.7}
                       >
                         <View style={styles.surveyCardTop}>
                           <Feather
-                            name={isHistorical ? 'lock' : (survey.isCompleted ? 'check-circle' : 'clipboard')}
+                            name={(isHistorical || isSurveyBlocked) ? 'lock' : (survey.isCompleted ? 'check-circle' : 'clipboard')}
                             size={24}
-                            color={isHistorical ? '#9CA3AF' : (survey.isCompleted ? '#10B981' : '#F59E0B')}
+                            color={(isHistorical || isSurveyBlocked) ? '#9CA3AF' : (survey.isCompleted ? '#10B981' : '#F59E0B')}
                           />
                           {survey.isCompleted && !isHistorical && (
                             <View style={styles.editBadge}>
@@ -666,12 +707,13 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
                           )}
                         </View>
                         <Text style={styles.surveyTitle} numberOfLines={2}>{survey.title}</Text>
-                        <Text style={[styles.surveyStatusText, isHistorical && { color: '#9CA3AF' }]}>
-                          {isHistorical ? 'No disponible' : (survey.isCompleted ? 'Completada' : 'Pendiente')}
+                        <Text style={[styles.surveyStatusText, (isHistorical || isSurveyBlocked) && { color: '#9CA3AF' }]}>
+                          {(isHistorical || isSurveyBlocked) ? 'No disponible' : (survey.isCompleted ? 'Completada' : 'Pendiente')}
                         </Text>
                       </TouchableOpacity>
                     </View>
-                  ))}
+                    );
+                  })}
                 </ScrollView>
               </View>
             )}
@@ -681,6 +723,21 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
             {/* ── Datos de la tarea ── */}
             <Text style={styles.sectionTitle}>Datos de la Tarea</Text>
             <InfoRow icon="user"     label="Cliente"  value={Array.isArray(task.partner_id) ? task.partner_id[1] : '-'} />
+            {clientMissingGeo && (
+              <TouchableOpacity style={styles.missingGeolocBanner} onPress={() => onNavigateToClients && onNavigateToClients(Array.isArray(task.partner_id) ? task.partner_id[0] : task.partner_id)} activeOpacity={0.8}>
+                <View style={styles.missingGeolocLeft}>
+                  <Feather name="alert-triangle" size={16} color="#B45309" />
+                  <View style={styles.missingGeolocTextBlock}>
+                    <Text style={styles.missingGeolocTitle}>Ubicación del cliente no registrada</Text>
+                    <Text style={styles.missingGeolocSubtitle}>Debes registrar la geolocalización del cliente para poder modificar esta tarea.</Text>
+                  </View>
+                </View>
+                <View style={styles.missingGeolocAction}>
+                  <Feather name="target" size={14} color="#92400E" />
+                  <Text style={styles.missingGeolocActionText}>Ir al cliente</Text>
+                </View>
+              </TouchableOpacity>
+            )}
             <InfoRow icon="briefcase" label="Proyecto" value={Array.isArray(task.project_id) ? task.project_id[1] : '-'} />
 
             <View style={styles.divider} />
@@ -1000,6 +1057,22 @@ const styles = StyleSheet.create({
     borderRadius: 8, gap: 4, marginLeft: 10,
   },
   missingDescriptionActionText: { fontSize: 12, fontWeight: '700', color: '#92400E' },
+
+  missingGeolocBanner: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: '#FFFBEB', borderWidth: 1, borderColor: '#FCD34D',
+    borderRadius: 10, padding: 12, marginBottom: 16, marginTop: 4,
+  },
+  missingGeolocLeft:     { flexDirection: 'row', alignItems: 'flex-start', flex: 1, gap: 10 },
+  missingGeolocTextBlock:{ flex: 1 },
+  missingGeolocTitle:    { fontSize: 13, fontWeight: '700', color: '#92400E', marginBottom: 2 },
+  missingGeolocSubtitle: { fontSize: 12, color: '#B45309', lineHeight: 17 },
+  missingGeolocAction:   {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#FEF3C7', paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: 8, gap: 4, marginLeft: 10,
+  },
+  missingGeolocActionText: { fontSize: 12, fontWeight: '700', color: '#92400E' },
 
   divider:       { height: 1, backgroundColor: '#F3F4F6', marginVertical: 20 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },

@@ -134,8 +134,6 @@ export default function HomeScreen({
     },
   ];
 
-  const fabActions = [{ icon: 'menu', onPress: () => setMenuVisible(true) }];
-
   return (
     <ScreenLayout
       userData={userData}
@@ -143,8 +141,8 @@ export default function HomeScreen({
       onLogout={handleLogout}
       menuVisible={menuVisible}
       setMenuVisible={setMenuVisible}
-      fabActions={fabActions}
       onNavigateToSyncHistory={onNavigateToSyncHistory}
+      onUnauthorized={onUnauthorized}
     >
       <ScrollView
         style={styles.scrollView}

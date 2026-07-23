@@ -18,9 +18,9 @@ import { usePrevious } from '../../../core/hooks/usePrevious';
 import { formatCurrency, getCurrencyCode } from '../../../core/utils/currencyhelper';
 import OdooService from '../../../core/api/odoo.service';
 
-export default function LeadsScreen({ userData, username, onBack, onLogout, onNavigateToTasks, onNavigateToSyncHistory }) {
+export default function LeadsScreen({ userData, username, onLogout, onNavigateToTasks, onNavigateToSyncHistory, onUnauthorized = () => {} }) {
   const { isOnline }            = useNetwork();
-  const { syncAll, syncModule } = useSyncActions();
+  const { syncAll, syncModule } = useSyncActions(onUnauthorized);
 
   const [leads, setLeads]                       = useState([]);
   const [filteredLeads, setFilteredLeads]       = useState([]);
@@ -173,13 +173,6 @@ export default function LeadsScreen({ userData, username, onBack, onLogout, onNa
     return uid === currentUserId;
   }).length;
 
-  const fabActions = [
-    { icon: 'more-vertical', onPress: () => {}                        },
-    { icon: 'menu',          onPress: () => setMenuVisible(true)      },
-    { icon: 'plus',          onPress: () => setCreateModal(true)      },
-    { icon: 'arrow-left',    onPress: onBack                          },
-  ];
-
   return (
     <ScreenLayout
       userData={userData}
@@ -187,8 +180,11 @@ export default function LeadsScreen({ userData, username, onBack, onLogout, onNa
       onLogout={onLogout}
       menuVisible={menuVisible}
       setMenuVisible={setMenuVisible}
-      fabActions={fabActions}
+      moduleName="leads"
+      onAdd={() => setCreateModal(true)}
+      addIcon="plus"
       onNavigateToSyncHistory={onNavigateToSyncHistory}
+      onUnauthorized={onUnauthorized}
     >
       <ScrollView
         style={styles.scrollView}

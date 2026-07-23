@@ -6,6 +6,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import SyncService from '../sync/sync.service';
 import { decodeHtmlEntities } from '../sync/sync.utils';
+import { isTaskClosed } from '../utils/taskStatusHelper';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -21,7 +22,7 @@ export default function SurveyResponsesModal({
   const [loading, setLoading] = useState(true);
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
-  const isTaskDone = taskState === '1_done';
+  const isTaskDone = isTaskClosed(taskState);
 
   useEffect(() => {
     console.log('[SurveyResponsesModal] useEffect triggered, visible:', visible, 'survey?.id:', survey?.id);

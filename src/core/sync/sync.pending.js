@@ -47,12 +47,18 @@ export async function createReasonWizard(model, wizardData = {}) {
   }
 }
 
-export async function syncPendingChangesNonSurvey() {
+export async function syncPendingChangesNonSurvey(modelsAllowed = null) {
   try {
     const pending = await StorageService.getItem(STORAGE_KEYS.PENDING_CHANGES) || [];
     if (pending.length === 0) return { success: 0, failed: 0, byModel: {} };
 
-    
+        const pendingToProcess = modelsAllowed
+      ? pending.filter(p => modelsAllowed.includes(p.model))
+      : pending;
+    const pendingSkipped = modelsAllowed
+      ? pending.filter(p => !modelsAllowed.includes(p.model))
+      : [];
+
     const allQuestions = await StorageService.getItem(STORAGE_KEYS.SURVEY_QUESTIONS) || [];
 
     let success = 0;
@@ -73,7 +79,7 @@ export async function syncPendingChangesNonSurvey() {
     // 4. Otros cambios
     // Ni una NC mas Maurice
 
-    for (const change of pending) {
+    for (const change of pendingToProcess) {
       try {
         if (typeof change.model !== 'string') {
           continue;
@@ -101,7 +107,7 @@ export async function syncPendingChangesNonSurvey() {
       }
     }
 
-    for (const change of pending) {
+    for (const change of pendingToProcess) {
       try {
         if (typeof change.model !== 'string') continue;
         
@@ -229,7 +235,7 @@ export async function syncPendingChangesNonSurvey() {
       }
     }
 
-    for (const change of pending) {
+    for (const change of pendingToProcess) {
       try {
         if (typeof change.model !== 'string') continue;
         
@@ -258,7 +264,7 @@ export async function syncPendingChangesNonSurvey() {
       }
     }
 
-    for (const change of pending) {
+    for (const change of pendingToProcess) {
       try {
         if (typeof change.model !== 'string') continue;
         
@@ -407,6 +413,7 @@ export async function syncPendingChangesNonSurvey() {
       }
     }
 
+    remainingPending.push(...pendingSkipped);
     await StorageService.setItem(STORAGE_KEYS.PENDING_CHANGES, remainingPending);
     
     // Actualizar IDs temporales en storage local

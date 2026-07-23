@@ -264,9 +264,9 @@ function DayTasksModal({ visible, date, tasks, onClose, onSelectTask }) {
 }
 
 // ─── TasksScreen ───────────────────────────────────────────────────────────────
-export default function TasksScreen({ userData, username, onBack, onLogout, onNavigateToLeads, onNavigateToSyncHistory }) {
+export default function TasksScreen({ userData, username, onLogout, onNavigateToLeads, onNavigateToClients, onNavigateToSyncHistory, onUnauthorized = () => {} }) {
   const { isOnline }            = useNetwork();
-  const { syncAll, syncModule } = useSyncActions();
+  const { syncAll, syncModule } = useSyncActions(onUnauthorized);
   const scrollViewRef           = useRef(null);
   const scrollXRef              = useRef(0);
 
@@ -647,7 +647,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout, onNa
   // ── Data actions ──────────────────────────────────────────────────────────────
   const handleRefresh = async () => {
     if (!isOnline) { Alert.alert('Sin conexión', 'Necesitas internet para sincronizar'); return; }
-    try { setRefreshing(true); await syncAll(); await loadTasks(); }
+    try { setRefreshing(true); await syncModule('tasks'); await loadTasks(); }
     finally { setRefreshing(false); }
   };
 
@@ -1020,14 +1020,6 @@ export default function TasksScreen({ userData, username, onBack, onLogout, onNa
     );
   };
 
-  // ── FAB actions ───────────────────────────────────────────────────────────────
-  const fabActions = [
-    { icon: 'more-vertical', onPress: () => {}                   },
-    { icon: 'menu',          onPress: () => setMenuVisible(true) },
-    { icon: 'file-plus',     onPress: () => setCreateModal(true) },
-    { icon: 'arrow-left',    onPress: onBack                     },
-  ];
-
   // ── Main render ───────────────────────────────────────────────────────────────
   return (
     <ScreenLayout
@@ -1036,8 +1028,11 @@ export default function TasksScreen({ userData, username, onBack, onLogout, onNa
       onLogout={onLogout}
       menuVisible={menuVisible}
       setMenuVisible={setMenuVisible}
-      fabActions={fabActions}
+      moduleName="tasks"
+      onAdd={() => setCreateModal(true)}
+      addIcon="file-plus"
       onNavigateToSyncHistory={onNavigateToSyncHistory}
+      onUnauthorized={onUnauthorized}
     >
       <ScrollView
         style={styles.scrollView}
@@ -1320,6 +1315,7 @@ export default function TasksScreen({ userData, username, onBack, onLogout, onNa
           onClose={() => setSelectedTask(null)}
           onTaskUpdated={handleTaskUpdated}
           onNavigateToLeads={onNavigateToLeads}
+          onNavigateToClients={onNavigateToClients}
         />
         <CreateTaskModal
           visible={isCreateModalVisible}

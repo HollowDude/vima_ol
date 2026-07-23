@@ -5,6 +5,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import SyncHistoryService from '../../../core/sync/sync.history';
 import useNetwork from '../../../core/hooks/useNetwork';
+import useSyncActions from '../../../core/hooks/useSyncActions';
 import DashboardHeader from '../../../core/components/DashboardHeader';
 import ScreenLayout from '../../../core/components/ScreenLayout';
 import Card from '../../../core/components/Card';
@@ -158,6 +159,7 @@ function SyncHistoryItem({ item }) {
             <Text style={styles.itemType} numberOfLines={1}>
               {item.type === 'syncAll' ? 'Sincronización Completa'
               : item.type === 'syncPending' ? 'Cambios Pendientes'
+              : item.type === 'syncModule' ? `Sincronización ${item.moduleLabel || item.phaseSequence?.[0] || ''}`
               : item.type}
             </Text>
             <Text style={styles.itemDateTime} numberOfLines={1}>
@@ -306,8 +308,9 @@ function SyncHistoryItem({ item }) {
 // Pantalla principal
 // ──────────────────────────────────────────────────────────────────────────────
 
-export default function SyncHistoryScreen({ userData, username, onBack, onLogout, onNavigateToSyncHistory, onUnauthorized = () => {} }) {
+export default function SyncHistoryScreen({ userData, username, onLogout, onNavigateToSyncHistory, onUnauthorized = () => {} }) {
   const { isOnline } = useNetwork();
+  const { syncAll } = useSyncActions(onUnauthorized);
   const [history, setHistory] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState('all');
@@ -328,9 +331,10 @@ export default function SyncHistoryScreen({ userData, username, onBack, onLogout
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    await syncAll();
     await loadHistory();
     setRefreshing(false);
-  }, [loadHistory]);
+  }, [loadHistory, syncAll]);
 
   const handleClearHistory = () => {
     Alert.alert(
@@ -354,11 +358,6 @@ export default function SyncHistoryScreen({ userData, username, onBack, onLogout
     if (filter === 'all') return true;
     return item.status === filter;
   });
-
-  const fabActions = [
-    { icon: 'menu',       onPress: () => setMenuVisible(true) },
-    { icon: 'arrow-left', onPress: onBack                     },
-  ];
 
   const renderFilterButton = (filterValue, icon, label) => (
     <TouchableOpacity
@@ -384,8 +383,8 @@ export default function SyncHistoryScreen({ userData, username, onBack, onLogout
       onLogout={onLogout}
       menuVisible={menuVisible}
       setMenuVisible={setMenuVisible}
-      fabActions={fabActions}
       onNavigateToSyncHistory={onNavigateToSyncHistory}
+      onUnauthorized={onUnauthorized}
     >
       <ScrollView
         style={styles.scrollView}

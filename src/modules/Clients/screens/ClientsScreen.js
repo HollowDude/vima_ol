@@ -16,9 +16,9 @@ import { useSyncContext } from '../../../core/context/SyncContext';
 import { usePrevious } from '../../../core/hooks/usePrevious';
 import OdooService from '../../../core/api/odoo.service';
 
-export default function ClientsScreen({ userData, username, onBack, onLogout, onNavigateToSyncHistory }) {
+export default function ClientsScreen({ userData, username, onLogout, onNavigateToSyncHistory, openClientId, onUnauthorized = () => {} }) {
   const { isOnline }            = useNetwork();
-  const { syncAll, syncModule } = useSyncActions();
+  const { syncAll, syncModule } = useSyncActions(onUnauthorized);
   const { refreshPendingCount } = useSyncContext();
 
   const [clients, setClients]                   = useState([]);
@@ -42,6 +42,13 @@ export default function ClientsScreen({ userData, username, onBack, onLogout, on
   }, [isOnline, prevOnline]);
 
   useEffect(() => { filterClients(); }, [searchQuery, clients, showOnlyOwn]);
+
+  useEffect(() => {
+    if (openClientId && clients.length) {
+      const found = clients.find(c => c.id === openClientId);
+      if (found) setSelectedClient(found);
+    }
+  }, [openClientId, clients]);
 
   const loadClients = async () => {
     try {
@@ -103,12 +110,6 @@ export default function ClientsScreen({ userData, username, onBack, onLogout, on
     setClients(upd);
   };
 
-  const fabActions = [
-    { icon: 'more-vertical', onPress: () => {}                   },
-    { icon: 'menu',          onPress: () => setMenuVisible(true) },
-    { icon: 'arrow-left',    onPress: onBack                     },
-  ];
-
   const ownCount = clients.filter(c => {
     const uid = Array.isArray(c.user_id) ? c.user_id[0] : c.user_id;
     return uid === OdooService.uid;
@@ -121,8 +122,9 @@ export default function ClientsScreen({ userData, username, onBack, onLogout, on
       onLogout={onLogout}
       menuVisible={menuVisible}
       setMenuVisible={setMenuVisible}
-      fabActions={fabActions}
+      moduleName="clients"
       onNavigateToSyncHistory={onNavigateToSyncHistory}
+      onUnauthorized={onUnauthorized}
     >
       <ScrollView
         style={styles.scrollView}

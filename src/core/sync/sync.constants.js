@@ -24,4 +24,7 @@ export const STORAGE_KEYS = {
   PREVIOUS_PROJECT_ID: '@vima_previous_project_id',
   EXTENDED_TASKS: '@vima_extended_tasks',
   SYNC_HISTORY: '@vima_sync_history',
+  LAST_SYNC_CLIENTS: '@vima_last_sync_clients',
+  LAST_SYNC_TASKS: '@vima_last_sync_tasks',
+  LAST_SYNC_LEADS: '@vima_last_sync_leads',
 };

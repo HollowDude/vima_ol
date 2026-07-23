@@ -16,6 +16,9 @@ import OdooService from '../api/odoo.service';
 class SyncService {
   constructor() {}
 
+  /** @deprecated No se usa en ningún lado. Todas las pantallas llaman a useSyncActions.syncAll().
+   *  Además tiene un bug: recordPushPhase(syncEntry, 'PENDING', pendingResult) en línea 41
+   *  pasa un string como segundo argumento donde se espera un objeto de operaciones. */
   async syncAll() {
     const startTime = Date.now();
     const syncEntry = SyncHistory.createSyncAllEntry(startTime);
@@ -37,8 +40,8 @@ class SyncService {
 
       // FASE 2: PENDING CHANGES (PUSH)
       try {
-        const pendingResult = await this.syncPendingChanges(true); // true = skipHistory
-        SyncHistory.recordPushPhase(syncEntry, 'PENDING', pendingResult);
+        const pendingResult = await this.syncPendingChanges(true);
+        SyncHistory.recordPushPhase(syncEntry, pendingResult);
       } catch (e) {
         syncEntry.push.errors.push({ phase: 'PENDING', error: e.message });
       }
@@ -46,7 +49,7 @@ class SyncService {
       // FASE 3: CLIENTS (PULL)
       try {
         const clientsResult = await this.syncClients();
-        const clientCount = clientsResult?.length || 0;
+        const clientCount = clientsResult?.clients?.length || 0;
         SyncHistory.recordPullPhase(syncEntry, 'CLIENTS', {
           'res.partner': { count: clientCount, created: clientCount }
         });
@@ -68,7 +71,7 @@ class SyncService {
       // FASE 5: LEADS (PULL)
       try {
         const leadsResult = await this.syncLeads();
-        const leadCount = leadsResult?.length || 0;
+        const leadCount = leadsResult?.leads?.length || 0;
         SyncHistory.recordPullPhase(syncEntry, 'LEADS', {
           'crm.lead': { count: leadCount }
         });
@@ -146,14 +149,14 @@ class SyncService {
   async syncSurveyResponses(...args) { return Surveys.syncSurveyResponses(...args); }
 
   // Pendientes
-  async syncPendingChanges(skipHistory = false) {
+  async syncPendingChanges(skipHistory = false, modelsAllowed = null) {
     const startTime = Date.now();
     const operationsData = {};
     let errors = [];
     
     try {
       // Encuestas
-      const surveyResult = await Surveys.syncSurveyResponses();
+      const surveyResult = await Surveys.syncSurveyResponses(modelsAllowed);
       if (surveyResult) {
         operationsData['survey.user_input'] = {
           created: surveyResult.created || 0,
@@ -166,7 +169,7 @@ class SyncService {
       }
       
       // Otros cambios pendientes
-      const otherResult = await Pending.syncPendingChangesNonSurvey();
+      const otherResult = await Pending.syncPendingChangesNonSurvey(modelsAllowed);
       if (otherResult) {
         if (otherResult.byModel) {
           Object.entries(otherResult.byModel).forEach(([model, stats]) => {
@@ -255,6 +258,7 @@ class SyncService {
   async getLocalSubtasks() { return Clients.getLocalSubtasks(); }
   async getLastSyncDate() { return Clients.getLastSyncDate(); }
   async updateClientLocally(clientId, updates, opts) { return Clients.updateClientLocally(clientId, updates, opts); }
+  async getClientById(clientId) { return Clients.getClientById(clientId); }
 
   // Leads
   // Leads
@@ -292,6 +296,8 @@ class SyncService {
       await StorageService.removeItem(STORAGE_KEYS.TASKS);
       await StorageService.removeItem(STORAGE_KEYS.MACROTASKS);
       await StorageService.removeItem(STORAGE_KEYS.LEADS);
+      await StorageService.removeItem(STORAGE_KEYS.LAST_SYNC_TASKS);
+      await StorageService.removeItem(STORAGE_KEYS.LAST_SYNC_LEADS);
     } catch (error) {
       console.error('Error limpiando caché de proyecto:', error);
     }
@@ -311,6 +317,22 @@ class SyncService {
       await StorageService.removeItem(STORAGE_KEYS.SURVEY_QUESTIONS);
       await StorageService.removeItem(STORAGE_KEYS.SURVEY_ANSWERS);
       await StorageService.removeItem(STORAGE_KEYS.SURVEY_PROGRESS);
+      await StorageService.removeItem(STORAGE_KEYS.LAST_SYNC_CLIENTS);
+      await StorageService.removeItem(STORAGE_KEYS.LAST_SYNC_TASKS);
+      await StorageService.removeItem(STORAGE_KEYS.LAST_SYNC_LEADS);
+      await StorageService.removeItem(STORAGE_KEYS.MASTER_COUNTRIES);
+      await StorageService.removeItem(STORAGE_KEYS.MASTER_STATES);
+      await StorageService.removeItem(STORAGE_KEYS.MASTER_MUNICIPALITIES);
+      await StorageService.removeItem(STORAGE_KEYS.MASTER_CLIENT_TYPES);
+      await StorageService.removeItem(STORAGE_KEYS.MASTER_TASK_TAGS);
+      await StorageService.removeItem(STORAGE_KEYS.MASTER_CRM_STAGES);
+      await StorageService.removeItem(STORAGE_KEYS.CURRENT_USER);
+      await StorageService.removeItem(STORAGE_KEYS.COMMENTS);
+      await StorageService.removeItem(STORAGE_KEYS.SURVEY_RELS);
+      await StorageService.removeItem(STORAGE_KEYS.SURVEY_USER_INPUTS);
+      await StorageService.removeItem(STORAGE_KEYS.EXTENDED_TASKS);
+      await StorageService.removeItem(STORAGE_KEYS.SYNC_HISTORY);
+      await Attachments.clearAttachmentsCache();
     } catch (error) {
       console.error(' Error limpiando datos locales:', error);
     }

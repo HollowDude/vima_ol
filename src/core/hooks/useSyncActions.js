@@ -105,7 +105,7 @@ export default function useSyncActions(onUnauthorized = () => {}) {
       const pendingStartedAt = Date.now();
       try {
         const pendingResult = await withRetry(
-          () => SyncService.syncPendingChanges(), 'Cambios pendientes'
+          () => SyncService.syncPendingChanges(true), 'Cambios pendientes'
         );
 
         const pushModels = {};
@@ -173,10 +173,12 @@ export default function useSyncActions(onUnauthorized = () => {}) {
       const dataPhaseDuration = Date.now() - dataPhaseStartedAt;
 
       if (clientsRes.status === 'fulfilled') {
+        const clientData = clientsRes.value || {};
+        const clientStats = clientData.stats || { created: 0, updated: 0 };
         results.clients.success = true;
-        results.clients.count   = clientsRes.value?.length || 0;
+        results.clients.count   = clientData.clients?.length || 0;
         SyncHistory.recordPullPhase(syncEntry, 'CLIENTS', {
-          'res.partner': { count: results.clients.count, created: results.clients.count, duration: dataPhaseDuration }
+          'res.partner': { count: results.clients.count, created: clientStats.created, updated: clientStats.updated, duration: dataPhaseDuration }
         });
       } else {
         results.clients.error = clientsRes.reason?.message;
@@ -191,13 +193,15 @@ export default function useSyncActions(onUnauthorized = () => {}) {
       }
 
       if (tasksRes.status === 'fulfilled') {
+        const taskData = tasksRes.value || {};
+        const taskStats = taskData.stats || { created: 0, updated: 0 };
         results.tasks.success = true;
-        results.tasks.count   = tasksRes.value?.subtasks?.length || 0;
-        if (tasksRes.value?.subtasks?.length) {
-          await SyncService.purgeExtendedTasksWithIds(tasksRes.value.subtasks.map(t => t.id));
+        results.tasks.count   = taskData.subtasks?.length || 0;
+        if (taskData.subtasks?.length) {
+          await SyncService.purgeExtendedTasksWithIds(taskData.subtasks.map(t => t.id));
         }
         SyncHistory.recordPullPhase(syncEntry, 'TASKS', {
-          'project.task': { count: results.tasks.count, created: results.tasks.count, duration: dataPhaseDuration }
+          'project.task': { count: results.tasks.count, created: taskStats.created, updated: taskStats.updated, duration: dataPhaseDuration }
         });
       } else {
         results.tasks.error = tasksRes.reason?.message;
@@ -212,10 +216,12 @@ export default function useSyncActions(onUnauthorized = () => {}) {
       }
 
       if (leadsRes.status === 'fulfilled') {
+        const leadData = leadsRes.value || {};
+        const leadStats = leadData.stats || { created: 0, updated: 0 };
         results.leads.success = true;
-        results.leads.count   = Array.isArray(leadsRes.value) ? leadsRes.value.length : 0;
+        results.leads.count   = leadData.leads?.length || 0;
         SyncHistory.recordPullPhase(syncEntry, 'LEADS', {
-          'crm.lead': { count: results.leads.count, created: results.leads.count, duration: dataPhaseDuration }
+          'crm.lead': { count: results.leads.count, created: leadStats.created, updated: leadStats.updated, duration: dataPhaseDuration }
         });
       } else {
         results.leads.error = leadsRes.reason?.message;
@@ -335,12 +341,24 @@ export default function useSyncActions(onUnauthorized = () => {}) {
       showToast('Sin conexión', 'warning');
       return null;
     }
+    if (isSyncingRef.current) return null;
+
+    const config = MODULE_SYNC_CONFIG[moduleName];
+    if (!config) {
+      showToast(`Módulo desconocido: ${moduleName}`, 'error');
+      return null;
+    }
+
+    isSyncingRef.current = true;
+    startSync();
 
     const startedAt = Date.now();
+    const results = { success: false };
     const syncEntry = {
       id: SyncHistory.createSyncAllEntry().id,
       timestamp: new Date().toISOString(),
       type: 'syncModule',
+      moduleLabel: config.label,
       direction: 'pull',
       status: 'syncing',
       startedAt,
@@ -350,60 +368,65 @@ export default function useSyncActions(onUnauthorized = () => {}) {
     };
 
     try {
-      await SyncService.syncPendingChanges();
-      await refreshPendingCount();
-    } catch (e) {
-      handleOdooError(e, {
-        onLogout: onUnauthorized,
-        onShowToast: showToast,
-      });
-    }
-
-    try {
-      let result;
-      switch (moduleName) {
-        case 'clients':
-          result = await SyncService.syncClients();
-          showToast(`Clientes actualizados (${result?.length || 0})`, 'success');
-          SyncHistory.recordPullPhase(syncEntry, 'CLIENTS', {
-            'res.partner': { count: result?.length || 0, created: result?.length || 0, duration: Date.now() - startedAt }
-          });
-          break;
-        case 'leads':
-          result = await SyncService.syncLeads();
-          showToast(`Oportunidades actualizadas`, 'success');
-          SyncHistory.recordPullPhase(syncEntry, 'LEADS', {
-            'crm.lead': { count: Array.isArray(result) ? result.length : 0, created: Array.isArray(result) ? result.length : 0, duration: Date.now() - startedAt }
-          });
-          break;
-        case 'tasks':
-          result = await SyncService.syncTasks();
-          showToast(`Tareas actualizadas`, 'success');
-          SyncHistory.recordPullPhase(syncEntry, 'TASKS', {
-            'project.task': { count: result?.subtasks?.length || 0, created: result?.subtasks?.length || 0, duration: Date.now() - startedAt }
-          });
-          break;
-        default:
-          result = null;
+      updatePhase('PENDING');
+      try {
+        await SyncService.syncPendingChanges(true, config.pushModels);
+        await refreshPendingCount();
+      } catch (e) {
+        handleOdooError(e, {
+          onLogout: onUnauthorized,
+          onShowToast: showToast,
+        });
       }
+
+      updatePhase(config.phaseName);
+      try {
+        const result = await config.pull();
+        results.success = true;
+        showToast(`${config.label} actualizados`, 'success');
+        SyncHistory.recordPullPhase(syncEntry, config.phaseName, {
+          [config.odooModel]: {
+            count: config.getCount(result),
+            created: result?.stats?.created || 0,
+            updated: result?.stats?.updated || 0,
+            duration: Date.now() - startedAt,
+          },
+        });
+      } catch (err) {
+        syncEntry.pull.errors.push({ phase: config.phaseName, error: err.message });
+
+        handleOdooError(err, {
+          onLogout: onUnauthorized,
+          onShowToast: showToast,
+        }, { action: `actualizar ${config.label}` });
+      }
+
+      updatePhase('DONE');
 
       const finalEntry = SyncHistory.finalizeSyncEntry(syncEntry);
       await SyncHistory.addSyncHistoryEntry(finalEntry);
 
       await refreshPendingCount();
-      return result;
-    } catch (err) {
+      await finishSync(results);
+      return null;
+    } catch (fatalError) {
+      updatePhase('ERROR');
+
       const failedEntry = SyncHistory.finalizeSyncEntry(syncEntry, 'failed');
-      failedEntry.errors.push({ operation: moduleName, error: err.message });
+      failedEntry.errors.push({ operation: moduleName, error: fatalError.message });
       await SyncHistory.addSyncHistoryEntry(failedEntry);
 
-      handleOdooError(err, {
+      handleOdooError(fatalError, {
         onLogout: onUnauthorized,
         onShowToast: showToast,
-      }, { action: `actualizar ${LABEL_MAP[moduleName] || moduleName}` });
+      }, { action: `actualizar ${config.label}` });
+
+      await finishSync({ ...results, fatalError: fatalError.message });
       return null;
+    } finally {
+      isSyncingRef.current = false;
     }
-  }, [isOnline, showToast, refreshPendingCount, onUnauthorized]);
+  }, [isOnline, startSync, finishSync, updatePhase, showToast, refreshPendingCount, onUnauthorized]);
 
   const notifyLocalWrite = useCallback(() => {
     refreshPendingCount();
@@ -411,6 +434,45 @@ export default function useSyncActions(onUnauthorized = () => {}) {
 
   return { syncAll, syncModule, notifyLocalWrite };
 }
+
+const MODULE_SYNC_CONFIG = {
+  clients: {
+    pushModels: ['res.partner'],
+    phaseName: 'CLIENTS',
+    odooModel: 'res.partner',
+    label: 'Clientes',
+    getCount: (r) => r?.clients?.length || 0,
+    pull: async () => {
+      await SyncService.syncMasterData();
+      return SyncService.syncClients();
+    },
+  },
+  leads: {
+    pushModels: ['crm.lead', 'project.task'],
+    phaseName: 'LEADS',
+    odooModel: 'crm.lead',
+    label: 'Oportunidades',
+    getCount: (r) => r?.leads?.length || 0,
+    pull: async () => {
+      await SyncService.syncMasterData();
+      return SyncService.syncLeads();
+    },
+  },
+  tasks: {
+    pushModels: ['project.task', 'survey.user_input', 'reason.wizard'],
+    phaseName: 'TASKS',
+    odooModel: 'project.task',
+    label: 'Tareas',
+    getCount: (r) => r?.subtasks?.length || 0,
+    pull: async () => {
+      await SyncService.syncMasterData();
+      const result = await SyncService.syncTasks();
+      await SyncService.syncSurveys();
+      await SyncService.syncAttachments();
+      return result;
+    },
+  },
+};
 
 const LABEL_MAP = {
   pending:     'Pendientes',

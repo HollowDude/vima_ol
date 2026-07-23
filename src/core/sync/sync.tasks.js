@@ -4,6 +4,21 @@ import { STORAGE_KEYS } from './sync.constants';
 import * as Session from './sync.session';
 import * as Master from './sync.masterdata';
 import * as Pending from './sync.pending';
+import { clientHasGeolocation } from '../utils/clientGeoHelper';
+import { getClientById } from './sync.clients';
+import { diffAndMerge, applyIncrementalDelta } from './sync.diff';
+
+async function assertClientGeolocation(task) {
+  const partnerId = Array.isArray(task.partner_id) ? task.partner_id[0] : task.partner_id;
+  if (!partnerId) return;
+  const client = await getClientById(partnerId);
+  if (!clientHasGeolocation(client)) {
+    const err = new Error('El cliente no tiene geolocalización registrada.');
+    err.code = 'CLIENT_NO_GEOLOCATION';
+    err.clientId = partnerId;
+    throw err;
+  }
+}
 
 export async function syncTasks(extraProjectId = null) {
   try {
@@ -42,15 +57,31 @@ export async function syncTasks(extraProjectId = null) {
         projectDomainFilter = [['project_id', '=', projectId]];
     }
 
-    const tasksDomain = [
-        '&',
-        ...projectDomainFilter,
-        '&',
-            ['active', '=', true],
-            '|',
-                ['user_ids', 'in', [currentUserId]],
-                ['partner_id', '=', current_user_id]
-    ];
+    const syncStartedAt = new Date(Date.now() - 10_000).toISOString();
+    const lastSync = await StorageService.getItem(STORAGE_KEYS.LAST_SYNC_TASKS);
+    const isIncremental = !!lastSync;
+
+    const tasksDomain = isIncremental
+      ? [
+          '&',
+          ...projectDomainFilter,
+          '&',
+          '|', ['active', '=', true], ['active', '=', false],
+          '&',
+          '|',
+            ['user_ids', 'in', [currentUserId]],
+            ['partner_id', '=', current_user_id],
+          ['write_date', '>', lastSync]
+        ]
+      : [
+          '&',
+          ...projectDomainFilter,
+          '&',
+              ['active', '=', true],
+              '|',
+                  ['user_ids', 'in', [currentUserId]],
+                  ['partner_id', '=', current_user_id]
+      ];
 
     const tasks = await OdooService.searchRead(
       'project.task',
@@ -60,13 +91,23 @@ export async function syncTasks(extraProjectId = null) {
         'parent_id', 'child_ids', 'date_deadline', 'stage_id',
         'description', 'partner_id', 'priority_level', 'management_tags',
         'state', 'finish_date', 'survey_id', 'task_survey_ids', 'start_date',
+        'write_date',
       ],
       1000
     );
 
-    await StorageService.setItem(STORAGE_KEYS.TASKS, tasks);
+    const previous = (await StorageService.getItem(STORAGE_KEYS.TASKS)) || [];
+    const pending = (await StorageService.getItem(STORAGE_KEYS.PENDING_CHANGES)) || [];
+    const protectedIds = new Set(pending.filter(p => p.model === 'project.task').map(p => p.recordId));
 
-    return { subtasks: tasks };
+    const { merged, stats } = isIncremental
+      ? applyIncrementalDelta(previous, tasks, protectedIds)
+      : diffAndMerge(previous, tasks, protectedIds);
+
+    await StorageService.setItem(STORAGE_KEYS.TASKS, merged);
+    await StorageService.setItem(STORAGE_KEYS.LAST_SYNC_TASKS, syncStartedAt);
+
+    return { subtasks: merged, stats };
   } catch (error) {
     console.error('❌ Error sincronizando tareas:', error);
     throw error;
@@ -110,13 +151,19 @@ export async function syncAllTasks(userId) {
         'name', 'project_id', 'user_ids',
         'parent_id', 'child_ids', 'date_deadline', 'stage_id',
         'description', 'partner_id', 'priority_level', 'management_tags',
-        'state', 'finish_date', 'survey_id', 'task_survey_ids', 'start_date'
+        'state', 'finish_date', 'survey_id', 'task_survey_ids', 'start_date',
+        'write_date',
       ],
       1000
     );
 
-    await StorageService.setItem(STORAGE_KEYS.TASKS, tasks);
-    return tasks;
+    const previous = (await StorageService.getItem(STORAGE_KEYS.TASKS)) || [];
+    const pending = (await StorageService.getItem(STORAGE_KEYS.PENDING_CHANGES)) || [];
+    const protectedIds = new Set(pending.filter(p => p.model === 'project.task').map(p => p.recordId));
+    const { merged } = diffAndMerge(previous, tasks, protectedIds);
+
+    await StorageService.setItem(STORAGE_KEYS.TASKS, merged);
+    return merged;
   } catch (error) {
     console.error('❌ Error sincronizando tareas (syncAllTasks):', error);
     throw error;
@@ -209,6 +256,14 @@ export async function createTaskLocally(taskData = {}) {
 export async function updateTaskLocally(taskId, updates = {}, opts = {}) {
   try {
     const tasks = (await StorageService.getItem(STORAGE_KEYS.TASKS)) || [];
+    const existingTask = tasks.find(t => t.id === taskId);
+    if (existingTask) {
+      await assertClientGeolocation(existingTask);
+    } else {
+      const extended = await getExtendedTasks();
+      const extTask = extended.find(t => t.id === taskId);
+      if (extTask) await assertClientGeolocation(extTask);
+    }
     let found = false;
     const updatedTasks = tasks.map(t => {
       if (t.id !== taskId) return t;

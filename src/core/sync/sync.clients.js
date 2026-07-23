@@ -2,18 +2,24 @@ import OdooService from '../api/odoo.service';
 import StorageService from '../storage/storage.service';
 import { STORAGE_KEYS } from './sync.constants';
 import * as Pending from './sync.pending';
+import { diffAndMerge, applyIncrementalDelta } from './sync.diff';
 
 
 export async function syncClients() {
   try {
     console.log('🔄 Sincronizando clientes...');
 
-    // ✅ Se descargan TODOS los clientes activos (sin filtro por user_id)
+    const syncStartedAt = new Date(Date.now() - 10_000).toISOString();
+    const lastSync = await StorageService.getItem(STORAGE_KEYS.LAST_SYNC_CLIENTS);
+    const isIncremental = !!lastSync;
+
+    const domain = isIncremental
+      ? ['|', ['active', '=', true], ['active', '=', false], ['write_date', '>', lastSync]]
+      : [['active', '=', true]];
+
     const clients = await OdooService.searchRead(
       'res.partner',
-      [
-        ['active', '=', true]
-      ],
+      domain,
       [
         'id', 'name', 'contact_person', 'email', 'phone', 'mobile',
         'street', 'street2', 'city', 'state_id', 'municipality',
@@ -30,9 +36,18 @@ export async function syncClients() {
       5000
     );
 
-    await StorageService.setItem(STORAGE_KEYS.CLIENTS, clients);
-    console.log('✅ Clientes sincronizados:', clients.length);
-    return clients;
+    const previous = (await StorageService.getItem(STORAGE_KEYS.CLIENTS)) || [];
+    const pending = (await StorageService.getItem(STORAGE_KEYS.PENDING_CHANGES)) || [];
+    const protectedIds = new Set(pending.filter(p => p.model === 'res.partner').map(p => p.recordId));
+
+    const { merged, stats } = isIncremental
+      ? applyIncrementalDelta(previous, clients, protectedIds)
+      : diffAndMerge(previous, clients, protectedIds);
+
+    await StorageService.setItem(STORAGE_KEYS.CLIENTS, merged);
+    await StorageService.setItem(STORAGE_KEYS.LAST_SYNC_CLIENTS, syncStartedAt);
+    console.log('✅ Clientes sincronizados:', merged.length, `(creados: ${stats.created}, actualizados: ${stats.updated})`);
+    return { clients: merged, stats };
   } catch (error) {
     console.error('❌ Error sincronizando clientes:', error);
     throw error;
@@ -137,6 +152,11 @@ export async function updateClientLocally(clientId, updates = {}, opts = {}) {
   }
 }
 
+export async function getClientById(clientId) {
+  const clients = await getLocalClients();
+  return clients.find(c => c.id === clientId) || null;
+}
+
 export default {
   syncClients,
   getLocalClients,
@@ -145,4 +165,5 @@ export default {
   getLocalSubtasks,
   getLastSyncDate,
   updateClientLocally,
+  getClientById,
 };

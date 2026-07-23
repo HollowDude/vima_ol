@@ -3,6 +3,7 @@ import StorageService from '../storage/storage.service';
 import { STORAGE_KEYS } from './sync.constants';
 import { addPendingChange } from './sync.pending';
 import { decodeSurveyQuestion, decodeHtmlEntities } from './sync.utils';
+import { isTaskClosed } from '../utils/taskStatusHelper';
 
 export async function syncSurveys() {
   try {
@@ -345,6 +346,12 @@ export async function completeSurvey(taskId, surveyId, answers, userInputId, rel
       throw new Error('relationId es requerido para completar la encuesta');
     }
 
+    const tasks = await StorageService.getItem(STORAGE_KEYS.TASKS) || [];
+    const localTask = tasks.find(t => t.id === taskId);
+    if (localTask && isTaskClosed(localTask.state)) {
+      throw new Error('No se puede completar la encuesta: la tarea está cerrada.');
+    }
+
     const progressData = await StorageService.getItem(STORAGE_KEYS.SURVEY_PROGRESS) || {};
     const key = `${taskId}_${surveyId}_${relationId}`;
 
@@ -411,10 +418,12 @@ function normalizeAnswerValue(questionType, answer) {
   }
 }
 
-export async function syncSurveyResponses() {
+export async function syncSurveyResponses(modelsAllowed = null) {
   try {
     const pending = await StorageService.getItem(STORAGE_KEYS.PENDING_CHANGES) || [];
-    const surveyCompletions = pending.filter(p => p.updates._is_survey_completion);
+    const surveyCompletions = modelsAllowed && !modelsAllowed.includes('survey.user_input')
+      ? []
+      : pending.filter(p => p.updates._is_survey_completion);
 
     if (surveyCompletions.length === 0) {
       return { success: 0, failed: 0 };
