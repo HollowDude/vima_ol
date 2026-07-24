@@ -634,9 +634,14 @@ export default function LeadDetailModal({ visible, lead, onClose, onLeadUpdated,
           userData={{ uid: lead.user_id }}
           partnerId={lead.partner_id ? (Array.isArray(lead.partner_id) ? lead.partner_id[0] : lead.partner_id) : null}
           hideClientSelector={true}
+          leadId={lead.id}
           onClose={() => setCreateTaskVisible(false)}
           onCreated={async (tid) => {
-            await SyncService.associateTaskToLead(lead.id, tid);
+            try {
+              await SyncService.associateTaskToLead(lead.id, tid);
+            } catch (e) {
+              console.warn('Error asociando lead a tarea (onCreated):', e);
+            }
             loadTasks();
             setCreateTaskVisible(false);
           }}

@@ -18,7 +18,7 @@ import { usePrevious } from '../../../core/hooks/usePrevious';
 import { formatCurrency, getCurrencyCode } from '../../../core/utils/currencyhelper';
 import OdooService from '../../../core/api/odoo.service';
 
-export default function LeadsScreen({ userData, username, onLogout, onNavigateToTasks, onNavigateToSyncHistory, onUnauthorized = () => {} }) {
+export default function LeadsScreen({ userData, username, onLogout, onNavigateToTasks, onNavigateToSyncHistory, onUnauthorized = () => {}, openLeadId }) {
   const { isOnline }            = useNetwork();
   const { syncAll, syncModule } = useSyncActions(onUnauthorized);
 
@@ -45,6 +45,13 @@ export default function LeadsScreen({ userData, username, onLogout, onNavigateTo
   }, [isOnline, prevOnline]);
 
   useEffect(() => { filterLeads(); }, [searchQuery, leads, showOnlyOwn, selectedStage]);
+
+  useEffect(() => {
+    if (openLeadId && leads.length) {
+      const found = leads.find(l => l.id === openLeadId);
+      if (found) setSelectedLead(found);
+    }
+  }, [openLeadId, leads]);
 
   const loadData = async () => {
     try {

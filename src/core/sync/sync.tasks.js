@@ -257,12 +257,14 @@ export async function updateTaskLocally(taskId, updates = {}, opts = {}) {
   try {
     const tasks = (await StorageService.getItem(STORAGE_KEYS.TASKS)) || [];
     const existingTask = tasks.find(t => t.id === taskId);
-    if (existingTask) {
-      await assertClientGeolocation(existingTask);
-    } else {
-      const extended = await getExtendedTasks();
-      const extTask = extended.find(t => t.id === taskId);
-      if (extTask) await assertClientGeolocation(extTask);
+    if (!opts.skipGeoCheck) {
+      if (existingTask) {
+        await assertClientGeolocation(existingTask);
+      } else {
+        const extended = await getExtendedTasks();
+        const extTask = extended.find(t => t.id === taskId);
+        if (extTask) await assertClientGeolocation(extTask);
+      }
     }
     let found = false;
     const updatedTasks = tasks.map(t => {

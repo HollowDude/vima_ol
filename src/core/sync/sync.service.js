@@ -271,6 +271,7 @@ class SyncService {
   async deleteLeadLocally(leadId) { return Leads.deleteLeadLocally(leadId); }
   async getLeadTasks(leadId) { return Leads.getLeadTasks(leadId); }
   async associateTaskToLead(leadId, taskId) { return Leads.associateTaskToLead(leadId, taskId); }
+  async disassociateTaskFromLead(leadId, taskId) { return Leads.disassociateTaskFromLead(leadId, taskId); }
   async getLeadsStatsByStage() { return Leads.getLeadsStatsByStage(); }
   async getLeadByTaskId(taskId) { return Leads.getLeadByTaskId(taskId); }
   async getLeadsByTaskId(taskId) { return Leads.getLeadsByTaskId(taskId); }

@@ -16,7 +16,6 @@ import AttachmentsModal from './AttachmentsModal';
 import SimpleDateTimePicker from './SimpleDateTimePicker';
 import ContactPickerModal from './ContactPickerModal';
 import ContactTypeBadge from './ContactTypeBadge';
-import { FEATURE_MULTI_CONTACT_BACKEND_READY } from '../constants/features';
 import useNetwork from '../hooks/useNetwork';
 import { clientHasGeolocation } from '../utils/clientGeoHelper';
 import { isTaskClosed } from '../utils/taskStatusHelper';
@@ -89,7 +88,7 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
   const [pendingStateChange, setPendingStateChange] = useState(null);
 
   const [showAttachmentsModal, setShowAttachmentsModal] = useState(false);
-  const [associatedLeads, setAssociatedLeads] = useState([]);
+  const [associatedLead, setAssociatedLead] = useState(null);
   const [showAddContact, setShowAddContact] = useState(false);
   const [allClients, setAllClients] = useState([]);
   const [allLeads, setAllLeads] = useState([]);
@@ -120,7 +119,7 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
   useEffect(() => {
     if (task) {
       checkIfUserOwnTask();
-      loadAssociatedLeads();
+      loadAssociatedLead();
       loadAttachmentsCount();
       loadAssociatedClient();
     }
@@ -134,6 +133,7 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
       setDescriptionDraft(stripHtml(task.description || ''));
       loadTags();
       loadSurveys();
+      loadContactLists();
       
       if (task.date_deadline) {
         setNewDate(parseOdooDate(task.date_deadline));
@@ -152,20 +152,26 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
     }
   }, [visible, task]);
 
-  const loadAssociatedLeads = async () => {
+  const loadAssociatedLead = async () => {
     if (!task?.id) return;
     try {
-      const leads = await SyncService.getLeadsByTaskId(task.id);
-      setAssociatedLeads(leads);
+      const lead = await SyncService.getLeadByTaskId(task.id);
+      setAssociatedLead(lead);
+    } catch { setAssociatedLead(null); }
+  };
+
+  const loadContactLists = async () => {
+    try {
       const [ownClients, ownLeads] = await Promise.all([
         SyncService.getOwnClients(),
         SyncService.getOwnLeads(),
       ]);
       setAllClients(ownClients);
-      // Excluir leads ya asociados
-      const associatedIds = new Set(leads.map(l => l.id));
-      setAllLeads(ownLeads.filter(l => !associatedIds.has(l.id)));
-    } catch { setAssociatedLeads([]); }
+      setAllLeads(ownLeads);
+    } catch {
+      setAllClients([]);
+      setAllLeads([]);
+    }
   };
 
 
@@ -503,6 +509,76 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
     );
   };
 
+  const handleContactSelect = (selected) => {
+    setShowAddContact(false);
+
+    const hasExistingContact = !!associatedLead || !!task?.partner_id;
+
+    if (!hasExistingContact) {
+      applyContactChange(selected);
+      return;
+    }
+
+    Alert.alert(
+      'Cambiar contacto',
+      '¿Estás seguro de que deseas cambiar el contacto? El contacto actual será reemplazado.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Cambiar', style: 'destructive', onPress: () => applyContactChange(selected) },
+      ]
+    );
+  };
+
+  const applyContactChange = async (selected) => {
+    try {
+      if (associatedLead) {
+        try {
+          await SyncService.disassociateTaskFromLead(associatedLead.id, task.id);
+        } catch (e) {
+          console.warn('Error disassociating old lead:', e);
+        }
+      }
+
+      let newPartnerId = false;
+      let selectedLeadId = null;
+      let contactName = selected.name;
+
+      if (selected.type === 'client') {
+        newPartnerId = selected.id;
+      } else if (selected.type === 'lead') {
+        const partner = await SyncService.resolveOrCreatePartnerForLead(selected.raw, { isOnline });
+        if (!partner) {
+          Alert.alert(
+            'Sin conexión',
+            `La oportunidad "${selected.name}" no tiene un contacto vinculado.\n\nNecesitas conexión para vincularla.`
+          );
+          return;
+        }
+        newPartnerId = partner.id;
+        contactName = partner.name || selected.name;
+        selectedLeadId = selected.id;
+      }
+
+      await SyncService.updateTaskLocally(task.id, { partner_id: [newPartnerId, contactName] }, { skipGeoCheck: true });
+
+      task.partner_id = [newPartnerId, contactName];
+
+      if (selectedLeadId) {
+        try {
+          await SyncService.associateTaskToLead(selectedLeadId, task.id);
+        } catch (e) {
+          console.warn('Error associating new lead:', e);
+        }
+      }
+
+      await Promise.all([loadAssociatedLead(), loadAssociatedClient()]);
+      if (onTaskUpdated) onTaskUpdated({ keepModalOpen: true });
+    } catch (e) {
+      if (e?.code === 'CLIENT_NO_GEOLOCATION') { showGeoBlockedAlert(e.clientId); return; }
+      Alert.alert('Error', 'No se pudo cambiar el contacto.');
+    }
+  };
+
   const statusInfo   = getStatusInfo();
   const priorityInfo = getPriorityInfo();
   const taskTags     = getTagNames();
@@ -633,24 +709,21 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
               </TouchableOpacity>
             </View>
 
-            {associatedLeads.length > 0 && (
+            {associatedLead && (
               <View style={styles.leadsSection}>
-                {associatedLeads.map((lead) => (
-                  <TouchableOpacity
-                    key={lead.id}
-                    style={styles.leadTag}
-                    onPress={() => onNavigateToLeads ? onNavigateToLeads() : {}}
-                    activeOpacity={0.7}
-                  >
-                    <View style={styles.leadTagLeft}>
-                      <Feather name="briefcase" size={14} color="#3B82F6" />
-                      <Text style={styles.leadTagText}>Oportunidad: {lead.name}</Text>
-                    </View>
-                    {onNavigateToLeads && (
-                      <Feather name="chevron-right" size={14} color="#3B82F6" />
-                    )}
-                  </TouchableOpacity>
-                ))}
+                <TouchableOpacity
+                  style={styles.leadTag}
+                  onPress={() => onNavigateToLeads ? onNavigateToLeads(associatedLead.id) : {}}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.leadTagLeft}>
+                    <Feather name="briefcase" size={14} color="#3B82F6" />
+                    <Text style={styles.leadTagText}>Oportunidad: {associatedLead.name}</Text>
+                  </View>
+                  {onNavigateToLeads && (
+                    <Feather name="chevron-right" size={14} color="#3B82F6" />
+                  )}
+                </TouchableOpacity>
               </View>
             )}
 
@@ -758,22 +831,19 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
                 </View>
               </TouchableOpacity>
             )}
-            {associatedLeads.length > 0 && (
+            {associatedLead && (
               <View style={styles.additionalContacts}>
-                {associatedLeads.map((lead) => (
-                  <TouchableOpacity
-                    key={lead.id}
-                    style={styles.contactRow}
-                    onPress={() => onNavigateToLeads ? onNavigateToLeads() : {}}
-                    activeOpacity={0.7}
-                  >
-                    <ContactTypeBadge type="lead" compact />
-                    <Text style={styles.contactRowText} numberOfLines={1}>{lead.name}</Text>
-                    {onNavigateToLeads && (
-                      <Feather name="chevron-right" size={14} color="#9CA3AF" />
-                    )}
-                  </TouchableOpacity>
-                ))}
+                <TouchableOpacity
+                  style={styles.contactRow}
+                  onPress={() => onNavigateToLeads ? onNavigateToLeads(associatedLead.id) : {}}
+                  activeOpacity={0.7}
+                >
+                  <ContactTypeBadge type="lead" compact />
+                  <Text style={styles.contactRowText} numberOfLines={1}>{associatedLead.name}</Text>
+                  {onNavigateToLeads && (
+                    <Feather name="chevron-right" size={14} color="#9CA3AF" />
+                  )}
+                </TouchableOpacity>
               </View>
             )}
             <TouchableOpacity
@@ -782,7 +852,9 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
               activeOpacity={0.7}
             >
               <Feather name="plus" size={14} color="#64c27b" />
-              <Text style={styles.addContactButtonText}>Agregar contacto</Text>
+              <Text style={styles.addContactButtonText}>
+                {!!associatedLead || !!task?.partner_id ? 'Cambiar contacto' : 'Agregar contacto'}
+              </Text>
             </TouchableOpacity>
             <InfoRow icon="briefcase" label="Proyecto" value={Array.isArray(task.project_id) ? task.project_id[1] : '-'} />
 
@@ -1002,45 +1074,12 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
 
             <ContactPickerModal
               visible={showAddContact}
-              title="Agregar Contacto"
+              title={associatedLead || task?.partner_id ? 'Cambiar Contacto' : 'Agregar Contacto'}
               clients={allClients}
               leads={allLeads}
-              selectedKeys={[]}
-              onConfirm={async (selected) => {
-                setShowAddContact(false);
-                const leadContacts = selected.filter(c => c.type === 'lead');
-                const clientContacts = selected.filter(c => c.type === 'client');
-                const resolved = [];
-
-                for (const contact of clientContacts) {
-                  resolved.push(contact.id);
-                }
-
-                // Leads no crean partner automáticamente — solo se asocian a la tarea
-
-                // Asociar leads a la tarea
-                for (const contact of leadContacts) {
-                  try {
-                    await SyncService.associateTaskToLead(contact.id, task.id);
-                  } catch (e) {
-                    console.warn('Error asociando lead:', e);
-                  }
-                }
-
-                if (FEATURE_MULTI_CONTACT_BACKEND_READY && resolved.length > 0) {
-                  try {
-                    await SyncService.updateTaskLocally(task.id, {
-                      task_contact_ids: [[4, ...resolved]],
-                    }, { noPending: true });
-                  } catch (e) {
-                    console.warn('Error actualizando task_contact_ids:', e);
-                  }
-                }
-
-                await loadAssociatedLeads();
-                if (onTaskUpdated) onTaskUpdated({ keepModalOpen: true });
-              }}
+              onSelect={handleContactSelect}
               onClose={() => setShowAddContact(false)}
+              isOnline={isOnline}
             />
 
             <AttachmentsModal

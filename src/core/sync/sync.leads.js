@@ -316,6 +316,21 @@ export async function associateTaskToLead(leadId, taskId) {
   }
 }
 
+export async function disassociateTaskFromLead(leadId, taskId) {
+  try {
+    const leads = (await StorageService.getItem(STORAGE_KEYS.LEADS)) || [];
+    const leadIndex = leads.findIndex(l => l.id === leadId);
+    if (leadIndex === -1) return;
+
+    leads[leadIndex].task_ids = (leads[leadIndex].task_ids || []).filter(id => id !== taskId);
+    leads[leadIndex].write_date = new Date().toISOString();
+    await StorageService.setItem(STORAGE_KEYS.LEADS, leads);
+    await Pending.addPendingChange('crm.lead', leadId, { task_ids: [[3, taskId]] });
+  } catch (error) {
+    throw error;
+  }
+}
+
 export async function getLeadsStatsByStage() {
   try {
     const leads = await getLocalLeads();
@@ -341,6 +356,7 @@ export default {
   deleteLeadLocally,
   getLeadTasks,
   associateTaskToLead,
+  disassociateTaskFromLead,
   getLeadsStatsByStage,
   getLeadByTaskId,
   getLeadsByTaskId,

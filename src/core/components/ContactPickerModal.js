@@ -6,135 +6,83 @@ import {
 import { Feather } from '@expo/vector-icons';
 import ContactTypeBadge from './ContactTypeBadge';
 
-const CLIENT_PREFIX = 'client-';
-const LEAD_PREFIX = 'lead-';
-
-function makeKey(type, id) {
-  return `${type}-${id}`;
-}
-
-function parseKey(key) {
-  if (key.startsWith(CLIENT_PREFIX)) return { type: 'client', id: parseInt(key.replace(CLIENT_PREFIX, ''), 10) };
-  if (key.startsWith(LEAD_PREFIX)) return { type: 'lead', id: parseInt(key.replace(LEAD_PREFIX, ''), 10) };
-  return null;
-}
-
 export default function ContactPickerModal({
   visible,
-  title = 'Seleccionar Contactos',
+  title = 'Seleccionar Contacto',
   clients = [],
   leads = [],
-  selectedKeys = [],
-  onConfirm,
+  onSelect,
   onClose,
+  isOnline = true,
 }) {
   const [search, setSearch] = useState('');
-  const [tempSelected, setTempSelected] = useState(new Set());
+  const [activeTab, setActiveTab] = useState('clients');
 
   useEffect(() => {
     if (visible) {
       setSearch('');
-      setTempSelected(new Set(selectedKeys));
+      setActiveTab('clients');
     }
   }, [visible]);
 
-  const allItems = useMemo(() => {
-    const items = [];
-    for (const c of clients) {
-      items.push({ key: makeKey('client', c.id), type: 'client', id: c.id, name: c.name, subtitle: c.email || c.phone || '', raw: c });
-    }
-    for (const l of leads) {
-      items.push({ key: makeKey('lead', l.id), type: 'lead', id: l.id, name: l.name, subtitle: l.email_from || l.phone || '', raw: l });
+  const displayedItems = useMemo(() => {
+    const source = activeTab === 'clients' ? clients : leads;
+    let items = source.map(item => ({
+      key: `${activeTab === 'clients' ? 'client' : 'lead'}-${item.id}`,
+      type: activeTab === 'clients' ? 'client' : 'lead',
+      id: item.id,
+      name: item.name,
+      subtitle: activeTab === 'clients'
+        ? (item.email || item.phone || item.mobile || '')
+        : (item.email_from || item.phone || item.mobile || ''),
+      raw: item,
+      disabled: activeTab === 'leads'
+        && !Array.isArray(item.partner_id)
+        && !isOnline,
+      disabledReason: activeTab === 'leads'
+        && !Array.isArray(item.partner_id)
+        && !isOnline
+        ? 'Sin contacto vinculado — requiere conexión'
+        : null,
+    }));
+    if (search.trim()) {
+      const lower = search.toLowerCase();
+      items = items.filter(item => item.name.toLowerCase().includes(lower));
     }
     return items;
-  }, [clients, leads]);
+  }, [activeTab, clients, leads, search, isOnline]);
 
-  const clientPartnerIds = useMemo(() => {
-    const ids = new Set();
-    for (const key of tempSelected) {
-      const parsed = parseKey(key);
-      if (parsed && parsed.type === 'client') ids.add(parsed.id);
-    }
-    return ids;
-  }, [tempSelected]);
-
-  const filtered = useMemo(() => {
-    if (!search.trim()) return allItems;
-    const lower = search.toLowerCase();
-    return allItems.filter(item => item.name.toLowerCase().includes(lower));
-  }, [allItems, search]);
-
-  const isDisabled = (item) => {
-    if (item.type === 'lead') {
-      const partnerId = Array.isArray(item.raw.partner_id) ? item.raw.partner_id[0] : null;
-      return partnerId && clientPartnerIds.has(partnerId);
-    }
-    return false;
+  const handleSelect = (item) => {
+    if (item.disabled) return;
+    const selected = { type: item.type, id: item.id, raw: item.raw, name: item.name };
+    onSelect(selected);
   };
 
-  const getDisabledReason = (item) => {
-    if (item.type === 'lead') {
-      const partnerId = Array.isArray(item.raw.partner_id) ? item.raw.partner_id[0] : null;
-      if (partnerId && clientPartnerIds.has(partnerId)) return 'Ya incluido como cliente';
-    }
-    return null;
-  };
-
-  const toggleItem = (item) => {
-    if (isDisabled(item)) return;
-    setTempSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(item.key)) next.delete(item.key);
-      else next.add(item.key);
-      return next;
-    });
-  };
-
-  const handleConfirm = () => {
-    const selected = [];
-    for (const key of tempSelected) {
-      const parsed = parseKey(key);
-      if (parsed) {
-        const found = allItems.find(i => i.key === key);
-        if (found) selected.push({ type: parsed.type, id: parsed.id, raw: found.raw, name: found.name });
-      }
-    }
-    onConfirm(selected);
-  };
-
-  const renderItem = ({ item }) => {
-    const selected = tempSelected.has(item.key);
-    const disabled = isDisabled(item);
-    const reason = getDisabledReason(item);
-
-    return (
-      <TouchableOpacity
-        style={[styles.item, selected && styles.itemSelected, disabled && styles.itemDisabled]}
-        onPress={() => toggleItem(item)}
-        activeOpacity={disabled ? 1 : 0.7}
-      >
-        <View style={styles.itemLeft}>
-          <View style={styles.checkbox}>
-            {selected && <Feather name="check" size={14} color="#fff" />}
+  const renderItem = ({ item }) => (
+    <TouchableOpacity
+      style={[styles.item, item.disabled && styles.itemDisabled]}
+      onPress={() => handleSelect(item)}
+      activeOpacity={item.disabled ? 1 : 0.7}
+    >
+      <View style={styles.itemLeft}>
+        <View style={styles.itemInfo}>
+          <View style={styles.itemNameRow}>
+            <Text style={[styles.itemName, item.disabled && styles.itemNameDisabled]} numberOfLines={1}>
+              {item.name}
+            </Text>
+            <ContactTypeBadge type={item.type} compact />
           </View>
-          <View style={styles.itemInfo}>
-            <View style={styles.itemNameRow}>
-              <Text style={[styles.itemName, disabled && styles.itemNameDisabled]} numberOfLines={1}>
-                {item.name}
-              </Text>
-              <ContactTypeBadge type={item.type} compact />
-            </View>
-            {item.subtitle ? (
-              <Text style={styles.itemSubtitle} numberOfLines={1}>{item.subtitle}</Text>
-            ) : null}
-            {reason ? (
-              <Text style={styles.itemDisabledReason}>{reason}</Text>
-            ) : null}
-          </View>
+          {item.subtitle ? (
+            <Text style={styles.itemSubtitle} numberOfLines={1}>{item.subtitle}</Text>
+          ) : null}
+          {item.disabledReason ? (
+            <Text style={styles.itemDisabledReason}>{item.disabledReason}</Text>
+          ) : null}
         </View>
-      </TouchableOpacity>
-    );
-  };
+      </View>
+      {!item.disabled && <Feather name="chevron-right" size={18} color="#D1D5DB" />}
+    </TouchableOpacity>
+  );
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -151,11 +99,30 @@ export default function ContactPickerModal({
               </TouchableOpacity>
             </View>
 
+            <View style={styles.segmentedControl}>
+              <TouchableOpacity
+                style={[styles.segment, activeTab === 'clients' && styles.segmentActive]}
+                onPress={() => { setActiveTab('clients'); setSearch(''); }}
+              >
+                <Text style={[styles.segmentText, activeTab === 'clients' && styles.segmentTextActive]}>
+                  Cliente
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.segment, activeTab === 'leads' && styles.segmentActive]}
+                onPress={() => { setActiveTab('leads'); setSearch(''); }}
+              >
+                <Text style={[styles.segmentText, activeTab === 'leads' && styles.segmentTextActive]}>
+                  Oportunidad
+                </Text>
+              </TouchableOpacity>
+            </View>
+
             <View style={styles.searchContainer}>
               <Feather name="search" size={20} color="#9CA3AF" style={styles.searchIcon} />
               <TextInput
                 style={styles.searchInput}
-                placeholder="Buscar clientes u oportunidades..."
+                placeholder={activeTab === 'clients' ? 'Buscar clientes...' : 'Buscar oportunidades...'}
                 value={search}
                 onChangeText={setSearch}
                 autoFocus={false}
@@ -169,33 +136,21 @@ export default function ContactPickerModal({
             </View>
 
             <FlatList
-              data={filtered}
+              data={displayedItems}
               keyExtractor={(item) => item.key}
               renderItem={renderItem}
               style={styles.list}
               keyboardShouldPersistTaps="handled"
               ListEmptyComponent={
                 <Text style={styles.emptyText}>
-                  {search ? 'No se encontraron contactos con ese nombre' : 'No hay clientes ni oportunidades disponibles'}
+                  {search
+                    ? 'No se encontraron contactos con ese nombre'
+                    : activeTab === 'clients'
+                      ? 'No hay clientes disponibles'
+                      : 'No hay oportunidades disponibles'}
                 </Text>
               }
             />
-
-            <View style={styles.footer}>
-              <Text style={styles.footerCount}>
-                {tempSelected.size} seleccionado{tempSelected.size !== 1 ? 's' : ''}
-              </Text>
-              <TouchableOpacity
-                style={[styles.confirmButton, tempSelected.size === 0 && styles.confirmButtonDisabled]}
-                onPress={handleConfirm}
-                disabled={tempSelected.size === 0}
-              >
-                <Feather name="check" size={16} color="#fff" />
-                <Text style={styles.confirmButtonText}>
-                  Agregar ({tempSelected.size})
-                </Text>
-              </TouchableOpacity>
-            </View>
           </View>
         </KeyboardAvoidingView>
       </View>
@@ -237,8 +192,36 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111827',
   },
-  closeButton: {
-    padding: 4,
+  closeButton: { padding: 4 },
+  segmentedControl: {
+    flexDirection: 'row',
+    margin: 16,
+    marginBottom: 0,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+    padding: 3,
+  },
+  segment: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  segmentActive: {
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  segmentText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  segmentTextActive: {
+    color: '#111827',
   },
   searchContainer: {
     flexDirection: 'row',
@@ -250,9 +233,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
-  searchIcon: {
-    marginRight: 8,
-  },
+  searchIcon: { marginRight: 8 },
   searchInput: {
     flex: 1,
     paddingVertical: 12,
@@ -274,9 +255,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 2,
   },
-  itemSelected: {
-    backgroundColor: '#F0FDF4',
-  },
   itemDisabled: {
     opacity: 0.55,
   },
@@ -286,19 +264,7 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 12,
   },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 4,
-    borderWidth: 2,
-    borderColor: '#D1D5DB',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#fff',
-  },
-  itemInfo: {
-    flex: 1,
-  },
+  itemInfo: { flex: 1 },
   itemNameRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -310,9 +276,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     flexShrink: 1,
   },
-  itemNameDisabled: {
-    color: '#9CA3AF',
-  },
+  itemNameDisabled: { color: '#9CA3AF' },
   itemSubtitle: {
     fontSize: 12,
     color: '#9CA3AF',
@@ -330,35 +294,5 @@ const styles = StyleSheet.create({
     marginTop: 30,
     marginBottom: 30,
     fontSize: 14,
-  },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
-  },
-  footerCount: {
-    fontSize: 13,
-    color: '#6B7280',
-    fontWeight: '600',
-  },
-  confirmButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#64c27b',
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    borderRadius: 8,
-    gap: 6,
-  },
-  confirmButtonDisabled: {
-    backgroundColor: '#D1D5DB',
-  },
-  confirmButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
   },
 });

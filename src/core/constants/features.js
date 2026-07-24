@@ -1,1 +1,0 @@
-export const FEATURE_MULTI_CONTACT_BACKEND_READY = false;
