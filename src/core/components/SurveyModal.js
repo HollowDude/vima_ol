@@ -741,9 +741,15 @@ export default function SurveyModal({ visible, taskId, taskState, surveyId, rela
 
   const handleComplete = async () => {
     try {
+      if (isTaskClosed(taskState)) {
+        Alert.alert('Encuesta no disponible', 'Esta encuesta no se puede completar porque la tarea asociada ya está cerrada.');
+        onClose();
+        return;
+      }
+
       const { tasks: freshTasks } = await SyncService.getAllVisibleTasks();
       const freshTask = freshTasks.find(t => t.id === taskId);
-      if (freshTask && isTaskClosed(freshTask.state)) {
+      if (!freshTask || isTaskClosed(freshTask.state)) {
         Alert.alert('Encuesta no disponible', 'Esta encuesta no se puede completar porque la tarea asociada ya está cerrada.');
         onClose();
         return;

@@ -16,8 +16,7 @@ import AttachmentsModal from './AttachmentsModal';
 import SimpleDateTimePicker from './SimpleDateTimePicker';
 import ContactPickerModal from './ContactPickerModal';
 import ContactTypeBadge from './ContactTypeBadge';
-
-const FEATURE_MULTI_CONTACT_BACKEND_READY = false;
+import { FEATURE_MULTI_CONTACT_BACKEND_READY } from '../constants/features';
 import useNetwork from '../hooks/useNetwork';
 import { clientHasGeolocation } from '../utils/clientGeoHelper';
 import { isTaskClosed } from '../utils/taskStatusHelper';
@@ -411,7 +410,6 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
   };
 
   const handleReprogram = async () => {
-    if (!reason.trim()) { Alert.alert("Razón requerida", "Debes proporcionar una razón para la reprogramación"); return; }
     await processReschedule();
   };
 
@@ -712,7 +710,7 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
                           survey.isCompleted ? styles.surveyCardDone : styles.surveyCardPending,
                           (isHistorical || isSurveyBlocked) && styles.surveyCardDisabled,
                         ]}
-                        onPress={(isHistorical || isSurveyBlocked) ? undefined : () => handleOpenSurvey(survey)}
+                        onPress={() => handleOpenSurvey(survey)}
                         activeOpacity={(isHistorical || isSurveyBlocked) ? 1 : 0.7}
                       >
                         <View style={styles.surveyCardTop}>
@@ -834,7 +832,7 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
                   mode="datetime"
                 />
                 <View style={styles.reasonField}>
-                  <Text style={styles.reasonLabel}>Razón de la reprogramación <Text style={styles.required}>*</Text></Text>
+                  <Text style={styles.reasonLabel}>Razón de la reprogramación</Text>
                   <TextInput
                     style={styles.reasonInput}
                     value={reason}
@@ -1018,22 +1016,7 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
                   resolved.push(contact.id);
                 }
 
-                const unresolved = [];
-                for (const contact of leadContacts) {
-                  const result = await SyncService.resolveOrCreatePartnerForLead(contact.raw, { isOnline });
-                  if (result) {
-                    resolved.push(result.id);
-                  } else {
-                    unresolved.push(contact);
-                  }
-                }
-
-                if (unresolved.length > 0) {
-                  Alert.alert(
-                    'Sin conexión',
-                    `No se pudo vincular ${unresolved.map(l => l.name).join(', ')}. Necesitas conexión.`
-                  );
-                }
+                // Leads no crean partner automáticamente — solo se asocian a la tarea
 
                 // Asociar leads a la tarea
                 for (const contact of leadContacts) {
@@ -1063,7 +1046,7 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
             <AttachmentsModal
               visible={showAttachmentsModal}
               taskId={task.id}
-              onClose={() => setShowAttachmentsModal(false)}
+              onClose={() => { setShowAttachmentsModal(false); loadAttachmentsCount(); }}
             />
 
             <View style={{ height: 60 }} />

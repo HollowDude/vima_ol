@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as IntentLauncher from 'expo-intent-launcher';
@@ -36,32 +37,75 @@ export default function AttachmentsModal({ visible, taskId, onClose }) {
     }
   };
 
-  const handlePickDocument = async () => {
+  const handlePickAttachment = () => {
+    Alert.alert(
+      'Seleccionar origen',
+      '¿De dónde deseas adjuntar el archivo?',
+      [
+        { text: 'Galería', onPress: pickFromGallery },
+        { text: 'Administrador de archivos', onPress: pickFromDocuments },
+        { text: 'Cancelar', style: 'cancel' },
+      ]
+    );
+  };
+
+  const pickFromGallery = async () => {
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permiso denegado', 'Necesitas aceptar el permiso para acceder a la galería');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.8,
+        allowsEditing: false,
+      });
+
+      if (result.canceled) return;
+
+      await uploadFile(result.assets[0]);
+    } catch (error) {
+      console.error('Error seleccionando imagen:', error);
+      Alert.alert('Error', 'No se pudo seleccionar la imagen');
+    }
+  };
+
+  const pickFromDocuments = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: '*/*',
         copyToCacheDirectory: true,
       });
 
-      if (result.canceled) {
-        return;
-      }
+      if (result.canceled) return;
 
-      const file = result.assets[0];
-      
-      // Validar tamaño (max 10MB)
-      if (file.size && file.size > 10 * 1024 * 1024) {
-        Alert.alert('Archivo muy grande', 'El archivo no debe superar 10MB');
-        return;
-      }
+      await uploadFile(result.assets[0]);
+    } catch (error) {
+      console.error('Error seleccionando archivo:', error);
+      Alert.alert('Error', 'No se pudo seleccionar el archivo');
+    }
+  };
 
-      setUploading(true);
+  const uploadFile = async (asset) => {
+    const fileName = asset.name || asset.fileName || 'sin_nombre';
+    const fileSize = asset.size || asset.fileSize || 0;
+    const mimeType = asset.mimeType || 'application/octet-stream';
 
+    if (fileSize > 10 * 1024 * 1024) {
+      Alert.alert('Archivo muy grande', 'El archivo no debe superar 10MB');
+      return;
+    }
+
+    setUploading(true);
+
+    try {
       await SyncService.uploadAttachment(
         taskId,
-        file.uri,
-        file.name,
-        file.mimeType || 'application/octet-stream'
+        asset.uri,
+        fileName,
+        mimeType
       );
 
       Alert.alert('✓ Archivo adjunto', 'Se subirá cuando haya conexión');
@@ -270,7 +314,7 @@ export default function AttachmentsModal({ visible, taskId, onClose }) {
         <View style={styles.footer}>
           <TouchableOpacity
             style={[styles.uploadButton, uploading && styles.uploadButtonDisabled]}
-            onPress={handlePickDocument}
+            onPress={handlePickAttachment}
             disabled={uploading}
           >
             {uploading ? (

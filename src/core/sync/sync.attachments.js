@@ -31,10 +31,13 @@ export async function syncAttachments() {
     
     const tasks = await StorageService.getItem(STORAGE_KEYS.TASKS) || [];
     const taskIds = tasks.map(t => t.id).filter(id => id > 0);
+
+    const existingAttachments = await StorageService.getItem(STORAGE_KEYS.ATTACHMENTS) || [];
+    const localAttachments = existingAttachments.filter(a => a._is_local);
     
     if (taskIds.length === 0) {
-      await StorageService.setItem(STORAGE_KEYS.ATTACHMENTS, []);
-      return [];
+      await StorageService.setItem(STORAGE_KEYS.ATTACHMENTS, localAttachments);
+      return localAttachments;
     }
 
     const attachments = await OdooService.searchRead(
@@ -65,10 +68,14 @@ export async function syncAttachments() {
         };
       })
     );
+
+    // Filtrar locales que ya existen en servidor (ya fueron subidos en este sync)
+    const serverKeys = new Set(enrichedAttachments.map(a => `${a.res_id}_${a.name}`));
+    const localOnly = localAttachments.filter(a => !serverKeys.has(`${a.res_id}_${a.name}`));
+    const mergedAttachments = [...enrichedAttachments, ...localOnly];
+    await StorageService.setItem(STORAGE_KEYS.ATTACHMENTS, mergedAttachments);
     
-    await StorageService.setItem(STORAGE_KEYS.ATTACHMENTS, enrichedAttachments);
-    
-    return enrichedAttachments;
+    return mergedAttachments;
   } catch (error) {
     console.error('❌ Error sincronizando adjuntos:', error);
     throw error;

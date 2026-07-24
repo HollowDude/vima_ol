@@ -10,8 +10,7 @@ import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view
 import ContactPickerModal from './ContactPickerModal';
 import ContactTypeBadge from './ContactTypeBadge';
 import SimpleDateTimePicker from './SimpleDateTimePicker';
-
-const FEATURE_MULTI_CONTACT_BACKEND_READY = false;
+import { FEATURE_MULTI_CONTACT_BACKEND_READY } from '../constants/features';
 
 // Format date to Odoo format - usa toISOString como en el resto de la app
 function formatLocalDate(dateObj) {
@@ -193,48 +192,20 @@ export default function CreateTaskModal({
       resolvedPartnerIds.push(contact.id);
     }
 
-    // Resolver leads → partners (online = crear, offline = avisar)
-    const unresolvedLeads = [];
-    for (const contact of leadContacts) {
-      const result = await SyncService.resolveOrCreatePartnerForLead(contact.raw, { isOnline });
-      if (result) {
-        resolvedPartnerIds.push(result.id);
-      } else {
-        unresolvedLeads.push(contact);
-      }
-    }
+    // Los leads no crean partner automáticamente — se asocian después de crear la tarea
 
-    if (unresolvedLeads.length > 0) {
-      const names = unresolvedLeads.map(l => l.name).join(', ');
-      Alert.alert(
-        'Sin conexión',
-        `La${unresolvedLeads.length > 1 ? 's' : ''} oportunidad${unresolvedLeads.length > 1 ? 'es' : ''} ${names} no tiene contacto vinculado.\n\nNecesitas conexión para vincularla la primera vez.\n\nLa tarea se creará igual sin incluir esa${unresolvedLeads.length > 1 ? 's' : ''} oportunidad${unresolvedLeads.length > 1 ? 'es' : ''}.`
-      );
-    }
-
-    // Determinar partner_id principal (primer contacto resuelto)
-    let finalPartnerId = partnerId;
+    // Determinar partner_id principal (primer cliente seleccionado, o false si solo hay leads)
+    let finalPartnerId = false;
     let clientName = '';
 
     if (resolvedPartnerIds.length > 0) {
       finalPartnerId = resolvedPartnerIds[0];
-      // Buscar nombre
-      const firstContact = selectedContacts.find(c => c.id === resolvedPartnerIds[0] || 
-        (c.type === 'lead' && clientContacts.length === 0 && leadContacts.length > 0));
-      if (firstContact) clientName = firstContact.name;
-    }
-
-    if (!finalPartnerId && partnerId) {
+      const firstClient = clientContacts.find(c => c.id === resolvedPartnerIds[0]);
+      if (firstClient) clientName = firstClient.name;
+    } else if (partnerId) {
       finalPartnerId = partnerId;
       const foundClient = clients.find(c => c.id === partnerId);
       clientName = foundClient?.name || '';
-    }
-
-    if (!finalPartnerId) {
-      // Fallback: usuario logueado como último recurso
-      const currentUserData = await SyncService.getCurrentUser();
-      finalPartnerId = currentUserData[0].partner_id[0];
-      clientName = '';
     }
 
     let userIdValue;
@@ -259,7 +230,7 @@ export default function CreateTaskModal({
       display_name: title,
       description: description.trim(),
       project_id: finalProjectId,
-      partner_id: [finalPartnerId, clientName],
+      partner_id: finalPartnerId ? [finalPartnerId, clientName] : false,
       user_ids: [[6, 0, [userIdValue]]],
       date_deadline: dateStr,
       priority_level: selectedPriority,

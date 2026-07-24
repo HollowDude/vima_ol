@@ -459,7 +459,7 @@ const MODULE_SYNC_CONFIG = {
     },
   },
   tasks: {
-    pushModels: ['project.task', 'survey.user_input', 'reason.wizard'],
+    pushModels: ['project.task', 'survey.user_input', 'reason.wizard', 'ir.attachment'],
     phaseName: 'TASKS',
     odooModel: 'project.task',
     label: 'Tareas',
