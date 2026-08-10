@@ -27,4 +27,5 @@ export const STORAGE_KEYS = {
   LAST_SYNC_CLIENTS: '@vima_last_sync_clients',
   LAST_SYNC_TASKS: '@vima_last_sync_tasks',
   LAST_SYNC_LEADS: '@vima_last_sync_leads',
+  SYNC_LOG: '@vima_sync_log',
 };

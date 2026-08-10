@@ -16,16 +16,13 @@ export default function BottomActionBar({
 
   return (
     <View style={styles.container} pointerEvents="box-none">
-      {onAdd && (
-        <TouchableOpacity
-          style={[styles.button, { backgroundColor: color }]}
-          onPress={onAdd}
-          activeOpacity={0.8}
-          disabled={isSyncing}
-        >
-          <Feather name={addIcon} size={20} color="#fff" />
-        </TouchableOpacity>
-      )}
+      <TouchableOpacity
+        style={[styles.button, { backgroundColor: color }]}
+        onPress={onMenu}
+        activeOpacity={0.8}
+      >
+        <Feather name="menu" size={20} color="#fff" />
+      </TouchableOpacity>
 
       <TouchableOpacity
         style={[styles.button, { backgroundColor: color }]}
@@ -38,13 +35,16 @@ export default function BottomActionBar({
         <Feather name="refresh-cw" size={20} color="#fff" />
       </TouchableOpacity>
 
-      <TouchableOpacity
-        style={[styles.button, { backgroundColor: color }]}
-        onPress={onMenu}
-        activeOpacity={0.8}
-      >
-        <Feather name="menu" size={20} color="#fff" />
-      </TouchableOpacity>
+      {onAdd && (
+        <TouchableOpacity
+          style={[styles.button, { backgroundColor: color }]}
+          onPress={onAdd}
+          activeOpacity={0.8}
+          disabled={isSyncing}
+        >
+          <Feather name={addIcon} size={20} color="#fff" />
+        </TouchableOpacity>
+      )}
     </View>
   );
 }

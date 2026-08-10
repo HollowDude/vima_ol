@@ -2,6 +2,33 @@ import OdooService from '../api/odoo.service';
 import StorageService from '../storage/storage.service';
 import { STORAGE_KEYS } from './sync.constants';
 import { sanitizeForOdoo } from './sync.utils';
+import SyncLog from './sync.log';
+
+async function withAttempts(fn, maxAttempts = 2) {
+  let lastError;
+  for (let i = 1; i <= maxAttempts; i++) {
+    try {
+      const result = await fn();
+      return { result, attempts: i };
+    } catch (err) {
+      lastError = err;
+      if (i < maxAttempts) await new Promise(r => setTimeout(r, 500 * i));
+    }
+  }
+  throw Object.assign(lastError, { attempts: maxAttempts });
+}
+
+async function logSyncResult(change, key, { attempts = 1, errorMessage = null } = {}) {
+  if (change.model === 'sync.log') return;
+  await SyncLog.logSyncOperation({
+    direction: 'push',
+    model: change.model,
+    resId: typeof change.recordId === 'number' ? change.recordId : 0,
+    state: key === 'failed' ? 'failed' : 'success',
+    attempts,
+    errorMessage: key === 'failed' ? errorMessage : null,
+  });
+}
 
 export async function addPendingChange(model, recordId, updates) {
   try {
@@ -91,12 +118,15 @@ export async function syncPendingChangesNonSurvey(modelsAllowed = null) {
           delete creationData._is_creation;
           const sanitized = sanitizeForOdoo(creationData);
           
-          const realId = await OdooService.create(change.model, sanitized);
+          const { result: realId, attempts: createAttempts } = await withAttempts(
+            () => OdooService.create(change.model, sanitized)
+          );
           
           taskIdMapping[tempId] = realId;
           
           success++;
           bump(change.model, 'created');
+          await logSyncResult(change, 'created', { attempts: createAttempts });
         }
       } catch (err) {
         if (typeof change.model === 'string' && change.model === 'project.task' && change.updates._is_creation) {
@@ -104,6 +134,7 @@ export async function syncPendingChangesNonSurvey(modelsAllowed = null) {
         }
         failed++;
         bump(change.model, 'failed');
+        await logSyncResult(change, 'failed', { attempts: err.attempts || 2, errorMessage: err.message });
       }
     }
 
@@ -223,15 +254,17 @@ export async function syncPendingChangesNonSurvey(modelsAllowed = null) {
 
           success++;
           bump(change.model, 'updated');
+          await logSyncResult(change, 'updated');
           continue; 
         }
       } catch (err) {
         console.error(`❌ Error procesando encuesta:`, err);
-        if (typeof change.model === 'string') {
+        if (typeof change.model === 'string' && change.model !== 'sync.log') {
           remainingPending.push(change);
         }
         failed++;
         bump(change.model, 'failed');
+        await logSyncResult(change, 'failed', { errorMessage: err.message });
       }
     }
 
@@ -252,15 +285,17 @@ export async function syncPendingChangesNonSurvey(modelsAllowed = null) {
           console.log(`✅ Tarea completada: ${change.model} #${change.recordId}`);
           success++;
           bump(change.model, 'updated');
+          await logSyncResult(change, 'updated');
           continue;
         }
       } catch (err) {
         console.error(`❌ Error completando tarea:`, err);
-        if (typeof change.model === 'string') {
+        if (typeof change.model === 'string' && change.model !== 'sync.log') {
           remainingPending.push(change);
         }
         failed++;
         bump(change.model, 'failed');
+        await logSyncResult(change, 'failed', { errorMessage: err.message });
       }
     }
 
@@ -298,6 +333,7 @@ export async function syncPendingChangesNonSurvey(modelsAllowed = null) {
 
           success++;
           bump(change.model, 'updated');
+          await logSyncResult(change, 'updated');
           continue;
         }
 
@@ -308,6 +344,7 @@ export async function syncPendingChangesNonSurvey(modelsAllowed = null) {
           console.log(` Registro eliminado en Odoo: ${change.model} #${change.recordId}`);
           success++;
           bump(change.model, 'deleted');
+          await logSyncResult(change, 'deleted');
           continue;
         }
 
@@ -341,6 +378,7 @@ export async function syncPendingChangesNonSurvey(modelsAllowed = null) {
           
           success++;
           bump(change.model, 'updated');
+          await logSyncResult(change, 'updated');
           continue;
         }
 
@@ -369,9 +407,12 @@ export async function syncPendingChangesNonSurvey(modelsAllowed = null) {
           }
           
           const sanitized = sanitizeForOdoo(creationData);
-          const realId = await OdooService.create(change.model, sanitized);
+          const { result: realId, attempts: createAttempts } = await withAttempts(
+            () => OdooService.create(change.model, sanitized)
+          );
           success++;
           bump(change.model, 'created');
+          await logSyncResult(change, 'created', { attempts: createAttempts });
           continue;
         }
 
@@ -386,6 +427,7 @@ export async function syncPendingChangesNonSurvey(modelsAllowed = null) {
           await OdooService.create(change.model, sanitizedWizard);
           success++;
           bump(change.model, 'created');
+          await logSyncResult(change, 'created');
           continue;
         }
 
@@ -402,14 +444,16 @@ export async function syncPendingChangesNonSurvey(modelsAllowed = null) {
         await OdooService.write(change.model, [change.recordId], sanitized);
         success++;
         bump(change.model, 'updated');
+        await logSyncResult(change, 'updated');
 
       } catch (err) {
         console.error(`❌ Error procesando pendiente (${JSON.stringify(change.model)}):`, err);
-        if (typeof change.model === 'string') {
+        if (typeof change.model === 'string' && change.model !== 'sync.log') {
           remainingPending.push(change);
         }
         failed++;
         bump(change.model, 'failed');
+        await logSyncResult(change, 'failed', { attempts: err.attempts || 1, errorMessage: err.message });
       }
     }
 

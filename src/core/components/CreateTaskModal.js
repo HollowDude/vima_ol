@@ -16,6 +16,15 @@ function formatLocalDate(dateObj) {
   return dateObj.toISOString().replace('T', ' ').split('.')[0];
 }
 
+// Parse fecha Odoo ("YYYY-MM-DD" o "YYYY-MM-DD HH:mm:ss") como fecha LOCAL, no UTC
+function parseLocalDate(dateStr) {
+  if (!dateStr) return null;
+  const parts = dateStr.split(' ');
+  const datePart = parts[0].split('-').map(Number);
+  const timePart = parts[1] ? parts[1].split(':').map(Number) : [0, 0, 0];
+  return new Date(datePart[0], datePart[1] - 1, datePart[2], timePart[0] || 0, timePart[1] || 0, timePart[2] || 0);
+}
+
 const PRIORITY_OPTIONS = [
   { id: 'baja', name: 'Baja', color: '#64c27b', icon: 'chevron-down' },
   { id: 'media', name: 'Media', color: '#F59E0B', icon: 'minus' },
@@ -156,7 +165,7 @@ export default function CreateTaskModal({
       }
 
       if (projectFinishDate) {
-        const finishDay = new Date(projectFinishDate);
+        const finishDay = parseLocalDate(projectFinishDate);
         finishDay.setHours(23, 59, 59);
         if (selectedDate > finishDay) {
           Alert.alert("Fuera de rango", `La fecha debe ser antes del ${finishDay.toLocaleDateString('es-ES')}`);
@@ -277,7 +286,7 @@ export default function CreateTaskModal({
     }
   };
 
-  const maxDate = projectFinishDate ? new Date(projectFinishDate) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+  const maxDate = projectFinishDate ? parseLocalDate(projectFinishDate) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
 
@@ -375,7 +384,7 @@ export default function CreateTaskModal({
               <View style={styles.rangeInfo}>
                 <Feather name="info" size={14} color="#64c27b" />
                 <Text style={styles.rangeInfoText}>
-                  Debe ser antes del {new Date(projectFinishDate).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  Debe ser antes del {parseLocalDate(projectFinishDate).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}
                 </Text>
               </View>
             )}

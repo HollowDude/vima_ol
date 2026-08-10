@@ -1,3 +1,7 @@
+import { Platform } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
+import * as Network from 'expo-network';
+
 const ODOO_URL = 'http://vima2.lombaoestudios.com';
 const DATABASE = 'vima2.lombaoestudios.com';
 
@@ -10,7 +14,42 @@ class OdooService {
   }
 
   /**
-   * Autenticación en Odoo usando JSON-RPC
+   * Obtiene el IP del dispositivo: expo-network funciona en Android e iOS,
+   * NetInfo queda como respaldo (Android WiFi/Ethernet).
+   */
+  async getDeviceIp() {
+    try {
+      const ip = await Network.getIpAddressAsync();
+      if (ip) return ip;
+    } catch (e) {
+      console.warn('No se pudo obtener el IP con expo-network:', e);
+    }
+    try {
+      const state = await NetInfo.fetch();
+      return state?.details?.ipAddress || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Variables de entorno que recibe el método `authenticate` del modelo common
+   * en el servidor, para que Odoo distinga si la llamada viene de la app móvil.
+   */
+  async buildUserAgentEnv() {
+    const platform = Platform.OS === 'ios' ? 'iphone' : Platform.OS;
+    const env = {
+      HTTP_USER_AGENT: platform,
+    };
+
+    const ip = await this.getDeviceIp();
+    if (ip) env.REMOTE_ADDR = ip;
+
+    return env;
+  }
+
+  /**
+   * Autenticación en Odoo usando JSON-RPC (método authenticate del servicio common)
    */
   async authenticate(username, password) {
     try {
@@ -25,8 +64,8 @@ class OdooService {
         method: "call",
         params: {
           service: "common",
-          method: "login",
-          args: [this.db, username, password],
+          method: "authenticate",
+          args: [this.db, username, password, await this.buildUserAgentEnv()],
         },
         id: 1,
       };

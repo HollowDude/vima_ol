@@ -38,23 +38,33 @@ const stripHtml = (html) => {
 
 const parseOdooDate = (dateStr) => {
   if (!dateStr) return null;
-  
-  // Si la cadena ya tiene el formato ISO (incluye T), la pasamos directo
-  if (dateStr.includes('T')) return new Date(dateStr);
 
-  // Odoo suele enviar "YYYY-MM-DD HH:mm:ss" o "YYYY-MM-DD"
-  let formatted = dateStr;
-  
-  if (dateStr.includes(' ')) {
-    // Es un DateTime: reemplazamos espacio por T y aseguramos el UTC
-    formatted = dateStr.replace(' ', 'T');
-    if (!formatted.endsWith('Z')) formatted += 'Z';
+  // Si la cadena ya tiene el formato ISO (incluye T y offset/Z), la pasamos directo
+  if (dateStr.includes('T') && /[Zz]|[+-]\d{2}:?\d{2}$/.test(dateStr)) {
+    const date = new Date(dateStr);
+    return isNaN(date.getTime()) ? null : date;
   }
-  // Si no tiene espacio, es un Date "YYYY-MM-DD" y JS lo parsea bien así
-  
-  const date = new Date(formatted);
-  
-  // Verificación de seguridad por si el string sigue siendo raro
+  // Si viene con "T" pero sin zona horaria, se interpreta como hora local
+  if (dateStr.includes('T')) {
+    return new Date(dateStr.replace('T', ' '));
+  }
+
+  // Odoo suele enviar "YYYY-MM-DD HH:mm:ss" o "YYYY-MM-DD" (siempre hora/fecha LOCAL,
+  // nunca UTC — forzar 'Z' retrocedía un día en zonas horarias negativas)
+  const parts = dateStr.split(' ');
+
+  const datePart = parts[0].split('-').map(Number);
+  const timePart = parts[1] ? parts[1].split(':').map(Number) : [0, 0, 0];
+
+  const date = new Date(
+    datePart[0],
+    datePart[1] - 1,
+    datePart[2],
+    timePart[0] || 0,
+    timePart[1] || 0,
+    timePart[2] || 0
+  );
+
   return isNaN(date.getTime()) ? null : date;
 };
 
@@ -205,6 +215,10 @@ export default function TaskDetailModal({ visible, task, allTasks, isHistorical 
       ? parseOdooDate(task.finish_date)
       : new Date(currentYear, currentMonth + 1, 0);
     maxDate.setHours(23, 59, 59, 999);
+
+    if (maxDate < minDate) {
+      maxDate = minDate;
+    }
 
     return { minDate, maxDate };
   };
@@ -877,7 +891,7 @@ const handleOpenSurveyInWeb = async (surveyUrl) => {
                 <View style={styles.rangeInfoContainer}>
                   <Feather name="info" size={14} color="#6B7280" />
                   <Text style={styles.rangeInfoText}>
-                    Rango permitido: {minDate.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })} al {maxDate.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })}
+                    Rango permitido: {minDate.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })} al {maxDate.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                   </Text>
                 </View>
                 <TouchableOpacity style={styles.datePickerButton} onPress={() => setShowPicker(true)}>

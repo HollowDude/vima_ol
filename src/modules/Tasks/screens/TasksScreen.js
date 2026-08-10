@@ -52,8 +52,8 @@ const getLocalDateString = (date) => {
 };
 
 const getEndOfMonthDate = (dateStr) => {
-  const d = new Date(dateStr);
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  const [y, m] = dateStr.split('-').map(Number);
+  return new Date(y, m, 0);
 };
 
 const formatDateStr = (dateStr) => {
@@ -65,9 +65,12 @@ const formatDateStr = (dateStr) => {
 
 const parseDeadline = (dateStr) => {
   if (!dateStr) return null;
-  let s = dateStr.replace(' ', 'T');
-  if (!s.endsWith('Z')) s += 'Z';
-  return new Date(s);
+  if (dateStr.includes('T') && /[Zz]|[+-]\d{2}:?\d{2}$/.test(dateStr)) return new Date(dateStr);
+  if (dateStr.includes('T')) return new Date(dateStr.replace('T', ' '));
+  const parts = dateStr.split(' ');
+  const datePart = parts[0].split('-').map(Number);
+  const timePart = parts[1] ? parts[1].split(':').map(Number) : [0, 0, 0];
+  return new Date(datePart[0], datePart[1] - 1, datePart[2], timePart[0] || 0, timePart[1] || 0, timePart[2] || 0);
 };
 
 // ─── TaskListItem ─────────────────────────────────────────────────────────────
@@ -215,10 +218,7 @@ function DayTasksModal({ visible, date, tasks, onClose, onSelectTask }) {
             keyExtractor={item => item.id.toString()}
             renderItem={({ item }) => {
               const tDate = item.date_deadline
-                ? new Date(
-                    item.date_deadline.replace(' ', 'T') +
-                    (item.date_deadline.includes('Z') ? '' : 'Z'),
-                  )
+                ? parseDeadline(item.date_deadline)
                 : new Date();
               const timeStr = tDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
               const isDone  = item.state === '1_done';

@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, TouchableOpacity, RefreshControl, Alert, ScrollView
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import SyncHistoryService from '../../../core/sync/sync.history';
+import SyncLog from '../../../core/sync/sync.log';
 import useNetwork from '../../../core/hooks/useNetwork';
 import useSyncActions from '../../../core/hooks/useSyncActions';
 import DashboardHeader from '../../../core/components/DashboardHeader';
@@ -18,9 +18,9 @@ const STATUS_COLORS = {
 };
 
 const DIRECTION_COLORS = {
-  pull: '#64c27b',   // Verde: descargas
-  push: '#3B82F6',   // Azul: subidas
-  both: '#8B5CF6',   // Púrpura: ambas
+  pull: '#64c27b',
+  push: '#3B82F6',
+  both: '#8B5CF6',
 };
 
 const MODEL_LABELS = {
@@ -29,115 +29,49 @@ const MODEL_LABELS = {
   'crm.lead': 'Oportunidades',
   'mail.message': 'Comentarios',
   'survey.survey': 'Encuestas',
-  'survey.user_input': 'Respuestas',
+  'survey.user_input': 'Respuestas Encuestas',
+  'survey.question': 'Preguntas',
+  'survey.question.answer': 'Respuestas Preguntas',
+  'project.task.survey.rel': 'Relación Encuestas',
   'ir.attachment': 'Adjuntos',
   'res.country': 'Países',
   'res.country.state': 'Estados',
   'res.municipality': 'Municipios',
-  'client.type': 'Tipos de cliente',
+  'client.type': 'Tipos de Cliente',
   'project.task.tags': 'Etiquetas',
   'crm.stage': 'Etapas CRM',
+  'reason.wizard': 'Razones',
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Componentes pequeños
-// ──────────────────────────────────────────────────────────────────────────────
+const PHASE_LABELS = {
+  MASTER: 'Datos base',
+  PENDING: 'Pendientes',
+  CLIENTS: 'Clientes',
+  TASKS: 'Tareas',
+  LEADS: 'Oportunidades',
+  COMMENTS: 'Comentarios',
+  SURVEYS: 'Encuestas',
+  ATTACHMENTS: 'Adjuntos',
+};
 
-function DirectionBadge({ direction }) {
-  const color = DIRECTION_COLORS[direction] || '#9CA3AF';
-  const label = direction === 'pull' ? '⬇ PULL' : direction === 'push' ? '⬆ PUSH' : '↔ AMBOS';
-  
-  return (
-    <View style={[styles.directionBadge, { backgroundColor: color + '20', borderColor: color }]}>
-      <Text style={[styles.directionBadgeText, { color }]}>{label}</Text>
-    </View>
-  );
-}
+const STATUS_FILTERS = [
+  { value: 'all', icon: 'inbox', label: 'Todas' },
+  { value: 'success', icon: 'check-circle', label: 'Éxito' },
+  { value: 'failed', icon: 'x-circle', label: 'Fallidas' },
+];
 
-function StatusBadge({ status }) {
-  const color = STATUS_COLORS[status] || STATUS_COLORS.partial;
-  const label = status === 'success' ? '✓ Éxito' 
-              : status === 'partial' ? '⚠ Parcial'
-              : status === 'failed' ? '✕ Fallido'
-              : status;
-  
-  return (
-    <View style={[styles.statusBadge, { backgroundColor: color + '20' }]}>
-      <View style={[styles.statusDot, { backgroundColor: color }]} />
-      <Text style={[styles.statusBadgeText, { color }]}>{label}</Text>
-    </View>
-  );
-}
+const DIRECTION_FILTERS = [
+  { value: 'all', icon: 'repeat', label: 'Ambos' },
+  { value: 'pull', icon: 'download', label: 'Pull' },
+  { value: 'push', icon: 'upload', label: 'Push' },
+];
 
-function ModelDetailRow({ model, count, icon = 'circle', duration }) {
-  const label = MODEL_LABELS[model] || model.split('.').pop();
-  const durStr = formatDuration(duration);
-  
-  return (
-    <View style={styles.modelDetailRow}>
-      <Feather name={icon} size={12} color="#9CA3AF" />
-      <Text style={styles.modelLabel}>{label}</Text>
-      <View style={styles.countBadge}>
-        <Text style={styles.countText}>{count}</Text>
-      </View>
-      {durStr && (
-        <Text style={styles.durationText}>{durStr}</Text>
-      )}
-    </View>
-  );
-}
-
-function formatDuration(ms) {
-  if (!ms && ms !== 0) return null;
-  if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return `${minutes}m ${remainingSeconds}s`;
-}
-
-function CRUDStats({ stats }) {
-  if (!stats || (stats.created === 0 && stats.updated === 0 && stats.deleted === 0 && stats.errors === 0)) {
-    return null;
-  }
-
-  return (
-    <View style={styles.crudStatsContainer}>
-      {stats.created > 0 && (
-        <View style={[styles.crudBadge, { backgroundColor: '#ECFDF5', borderColor: '#10B981' }]}>
-          <Text style={[styles.crudText, { color: '#10B981' }]}>+{stats.created}</Text>
-        </View>
-      )}
-      {stats.updated > 0 && (
-        <View style={[styles.crudBadge, { backgroundColor: '#EEF2FF', borderColor: '#3B82F6' }]}>
-          <Text style={[styles.crudText, { color: '#3B82F6' }]}>◻{stats.updated}</Text>
-        </View>
-      )}
-      {stats.deleted > 0 && (
-        <View style={[styles.crudBadge, { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' }]}>
-          <Text style={[styles.crudText, { color: '#F59E0B' }]}>-{stats.deleted}</Text>
-        </View>
-      )}
-      {stats.errors > 0 && (
-        <View style={[styles.crudBadge, { backgroundColor: '#FEF2F2', borderColor: '#EF4444' }]}>
-          <Text style={[styles.crudText, { color: '#EF4444' }]}>✕{stats.errors}</Text>
-        </View>
-      )}
-    </View>
-  );
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Item expandible de Sync
-// ──────────────────────────────────────────────────────────────────────────────
-
-function SyncHistoryItem({ item }) {
+function SyncLogRow({ entry }) {
   const [expanded, setExpanded] = useState(false);
-  
+
   const formatDate = (isoString) => {
     const date = new Date(isoString);
-    return date.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' });
+    return date.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' });
   };
 
   const formatTime = (isoString) => {
@@ -145,236 +79,118 @@ function SyncHistoryItem({ item }) {
     return date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
   };
 
-  return (
-    <View style={styles.itemContainer}>
-      {/* Header */}
-      <TouchableOpacity
-        style={styles.itemHeader}
-        onPress={() => setExpanded(!expanded)}
-        activeOpacity={0.7}
-      >
-        <View style={styles.itemHeaderLeft}>
-          <View style={[styles.itemStatusDot, { backgroundColor: STATUS_COLORS[item.status] }]} />
-          <View style={styles.itemMeta}>
-            <Text style={styles.itemType} numberOfLines={1}>
-              {item.type === 'syncAll' ? 'Sincronización Completa'
-              : item.type === 'syncPending' ? 'Cambios Pendientes'
-              : item.type === 'syncModule' ? `Sincronización ${item.moduleLabel || item.phaseSequence?.[0] || ''}`
-              : item.type}
-            </Text>
-            <Text style={styles.itemDateTime} numberOfLines={1}>
-              {formatDate(item.timestamp)} • {formatTime(item.timestamp)}
-            </Text>
-          </View>
-        </View>
+  const modelLabel = PHASE_LABELS[entry.model] || MODEL_LABELS[entry.model] || entry.model;
+  const color = STATUS_COLORS[entry.state] || '#9CA3AF';
+  const dirColor = DIRECTION_COLORS[entry.direction] || '#9CA3AF';
 
-        <View style={styles.itemHeaderRight}>
-          <StatusBadge status={item.status} />
-          <Feather 
-            name={expanded ? 'chevron-up' : 'chevron-down'} 
-            size={20} 
-            color="#9CA3AF" 
-            style={styles.expandIcon}
-          />
+  return (
+    <View style={styles.logItemContainer}>
+      <TouchableOpacity
+        style={styles.logItemHeader}
+        onPress={() => entry.error_message && setExpanded(!expanded)}
+        activeOpacity={entry.error_message ? 0.7 : 1}
+      >
+        <View style={[styles.logDot, { backgroundColor: color }]} />
+        <View style={styles.logMeta}>
+          <Text style={styles.logModel} numberOfLines={1}>{modelLabel}</Text>
+          <Text style={styles.logDateTime}>
+            {formatDate(entry.date)} • {formatTime(entry.date)}
+            {entry.direction === 'push' && entry.res_id > 0 ? ` • #${entry.res_id}` : ''}
+            {entry.attempts > 1 ? ` • (${entry.attempts} intentos)` : ''}
+          </Text>
+        </View>
+        <View style={[styles.logDirBadge, { backgroundColor: dirColor + '20', borderColor: dirColor }]}>
+          <Text style={[styles.logDirText, { color: dirColor }]}>
+            {entry.direction === 'pull' ? 'PULL' : 'PUSH'}
+          </Text>
         </View>
       </TouchableOpacity>
-
-      {/* Detalles expandidos */}
-      {expanded && (
-        <View style={styles.itemDetails}>
-          {/* Duración */}
-          {item.duration !== undefined && (
-            <View style={styles.detailRow}>
-              <Feather name="clock" size={14} color="#64c27b" />
-              <Text style={styles.detailLabel}>Duración:</Text>
-              <Text style={styles.detailValue}>{formatDuration(item.duration)}</Text>
-            </View>
-          )}
-
-          {/* Direction */}
-          {item.direction && (
-            <View style={styles.detailRow}>
-              <Feather name="repeat" size={14} color="#3B82F6" />
-              <Text style={styles.detailLabel}>Dirección:</Text>
-              <DirectionBadge direction={item.direction} />
-            </View>
-          )}
-
-          {/* PULL Details */}
-          {item.pull && (
-            <View style={styles.phaseSection}>
-              <View style={styles.phaseHeader}>
-                <Feather name="download" size={14} color="#64c27b" />
-                <Text style={styles.phaseTitle}>PULL (Descargas)</Text>
-                <View style={styles.phaseStats}>
-                  <Text style={styles.phaseStatsText}>
-                    {item.pull.totalRecords || 0} registros • {item.pull.totalModels || 0} modelos
-                  </Text>
-                </View>
-              </View>
-
-              {item.pull.models && Object.keys(item.pull.models).length > 0 ? (
-                Object.entries(item.pull.models).map(([model, data]) => (
-                  <View key={model} style={styles.modelBlock}>
-                    <ModelDetailRow 
-                      model={model} 
-                      count={data.count || 0}
-                      duration={data.duration}
-                      icon={model === 'res.partner' ? 'users' 
-                          : model === 'project.task' ? 'check-square'
-                          : model === 'crm.lead' ? 'briefcase'
-                          : model === 'mail.message' ? 'message-circle'
-                          : 'circle'}
-                    />
-                    {data.created > 0 || data.updated > 0 ? (
-                      <CRUDStats stats={data} />
-                    ) : (
-                      <Text style={styles.noDataText}>Sin nuevos datos</Text>
-                    )}
-                  </View>
-                ))
-              ) : (
-                <Text style={styles.noDataText}>No se descargaron datos</Text>
-              )}
-
-              {item.pull.errors && item.pull.errors.length > 0 && (
-                <View style={styles.errorSection}>
-                  <Text style={styles.errorLabel}>
-                    ⚠ {item.pull.errors.length} error(es) en PULL
-                  </Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {/* PUSH Details */}
-          {item.push && (
-            <View style={styles.phaseSection}>
-              <View style={styles.phaseHeader}>
-                <Feather name="upload" size={14} color="#3B82F6" />
-                <Text style={styles.phaseTitle}>PUSH (Subidas)</Text>
-                <View style={styles.phaseStats}>
-                  <Text style={styles.phaseStatsText}>
-                    {item.push.totalRecords || 0} registros • {item.push.totalModels || 0} modelos
-                  </Text>
-                </View>
-              </View>
-
-              {item.push.models && Object.keys(item.push.models).length > 0 ? (
-                Object.entries(item.push.models).map(([model, data]) => (
-                  <View key={model} style={styles.modelBlock}>
-                    <ModelDetailRow 
-                      model={model} 
-                      count={(data.created || 0) + (data.updated || 0) + (data.deleted || 0)}
-                      duration={data.duration}
-                      icon={model === 'res.partner' ? 'users' 
-                          : model === 'project.task' ? 'check-square'
-                          : model === 'crm.lead' ? 'briefcase'
-                          : 'circle'}
-                    />
-                    <CRUDStats stats={data} />
-                  </View>
-                ))
-              ) : (
-                <Text style={styles.noDataText}>No se subieron datos</Text>
-              )}
-
-              {item.push.errors && item.push.errors.length > 0 && (
-                <View style={styles.errorSection}>
-                  <Text style={styles.errorLabel}>
-                    ⚠ {item.push.errors.length} error(es) en PUSH
-                  </Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {/* Error general */}
-          {item.error && (
-            <View style={[styles.errorSection, { backgroundColor: '#FEF2F2', borderColor: '#EF4444' }]}>
-              <Feather name="alert-circle" size={14} color="#EF4444" />
-              <Text style={[styles.errorLabel, { color: '#EF4444' }]}>
-                Error: {item.error}
-              </Text>
-            </View>
-          )}
+      {expanded && entry.error_message && (
+        <View style={[styles.logError, { backgroundColor: '#FEF2F2', borderColor: '#EF4444' }]}>
+          <Feather name="alert-circle" size={14} color="#EF4444" />
+          <Text style={styles.logErrorText}>{entry.error_message}</Text>
         </View>
       )}
     </View>
   );
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Pantalla principal
-// ──────────────────────────────────────────────────────────────────────────────
-
 export default function SyncHistoryScreen({ userData, username, onLogout, onNavigateToSyncHistory, onUnauthorized = () => {} }) {
   const { isOnline } = useNetwork();
   const { syncAll } = useSyncActions(onUnauthorized);
-  const [history, setHistory] = useState([]);
+  const [logEntries, setLogEntries] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
-  const [filter, setFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [directionFilter, setDirectionFilter] = useState('all');
   const [menuVisible, setMenuVisible] = useState(false);
 
-  const loadHistory = useCallback(async () => {
+  const loadData = useCallback(async () => {
     try {
-      const data = await SyncHistoryService.getSyncHistory();
-      setHistory(data);
+      const logs = await SyncLog.getLocalSyncLogs();
+      setLogEntries(logs);
     } catch (error) {
-      console.error('Error cargando historial:', error);
+      console.error('Error cargando registro de sincronización:', error);
     }
   }, []);
 
   useEffect(() => {
-    loadHistory();
-  }, [loadHistory]);
+    loadData();
+    const unsub = SyncLog.onLogEntry(entry => {
+      setLogEntries(prev => [entry, ...prev]);
+    });
+    return unsub;
+  }, [loadData]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await syncAll();
-    await loadHistory();
+    await loadData();
     setRefreshing(false);
-  }, [loadHistory, syncAll]);
+  }, [loadData, syncAll]);
 
-  const handleClearHistory = () => {
+  const handleClear = () => {
     Alert.alert(
-      'Limpiar Historial',
-      '¿Estás seguro de que quieres borrar todo el historial?',
+      'Limpiar',
+      '¿Estás seguro de que quieres borrar todo el registro de operaciones?',
       [
         { text: 'Cancelar', style: 'cancel' },
-        { 
-          text: 'Borrar', 
-          style: 'destructive', 
+        {
+          text: 'Borrar',
+          style: 'destructive',
           onPress: async () => {
-            await SyncHistoryService.clearSyncHistory();
-            await loadHistory();
-          }
+            await SyncLog.clearLocalSyncLogs();
+            await loadData();
+          },
         },
       ]
     );
   };
 
-  const filteredHistory = history.filter(item => {
-    if (filter === 'all') return true;
-    return item.status === filter;
+  const filteredLogs = logEntries.filter(e => {
+    if (statusFilter !== 'all' && e.state !== statusFilter) return false;
+    if (directionFilter !== 'all' && e.direction !== directionFilter) return false;
+    return true;
   });
 
-  const renderFilterButton = (filterValue, icon, label) => (
+  const renderFilterButton = (filterValue, icon, label, currentFilter, setter) => (
     <TouchableOpacity
-      style={[styles.filterButton, filter === filterValue && styles.filterButtonActive]}
-      onPress={() => setFilter(filterValue)}
+      key={filterValue}
+      style={[styles.filterButton, currentFilter === filterValue && styles.filterButtonActive]}
+      onPress={() => setter(filterValue)}
       activeOpacity={0.7}
     >
-      <Feather 
-        name={icon} 
-        size={14} 
-        color={filter === filterValue ? '#fff' : '#9CA3AF'} 
+      <Feather
+        name={icon}
+        size={14}
+        color={currentFilter === filterValue ? '#fff' : '#9CA3AF'}
       />
-      <Text style={[styles.filterButtonText, filter === filterValue && styles.filterButtonTextActive]}>
+      <Text style={[styles.filterButtonText, currentFilter === filterValue && styles.filterButtonTextActive]}>
         {label}
       </Text>
     </TouchableOpacity>
   );
+
+  const hasData = logEntries.length > 0;
 
   return (
     <ScreenLayout
@@ -390,9 +206,9 @@ export default function SyncHistoryScreen({ userData, username, onLogout, onNavi
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
-          <RefreshControl 
-            refreshing={refreshing} 
-            onRefresh={onRefresh} 
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
             colors={['#64c27b']}
             tintColor="#64c27b"
           />
@@ -402,44 +218,42 @@ export default function SyncHistoryScreen({ userData, username, onLogout, onNavi
           <DashboardHeader userName={username || 'Usuario'} isOnline={isOnline} />
 
           <View style={styles.cardContent}>
-            {/* Título */}
-            <Text style={styles.title}>Historial de Sincronización</Text>
+            <Text style={styles.title}>Registro de Sincronización</Text>
 
-            {/* Filtros */}
             <View style={styles.filterContainer}>
-              {renderFilterButton('all', 'inbox', 'Todas')}
-              {renderFilterButton('success', 'check-circle', 'Éxitos')}
-              {renderFilterButton('partial', 'alert-circle', 'Parciales')}
-              {renderFilterButton('failed', 'x-circle', 'Fallidas')}
+              {STATUS_FILTERS.map(f => renderFilterButton(f.value, f.icon, f.label, statusFilter, setStatusFilter))}
+            </View>
+            <View style={[styles.filterContainer, { marginTop: 6 }]}>
+              {DIRECTION_FILTERS.map(f => renderFilterButton(f.value, f.icon, f.label, directionFilter, setDirectionFilter))}
             </View>
 
-            {/* Lista de items */}
-            {filteredHistory.length === 0 ? (
+            {!hasData ? (
               <View style={styles.emptyState}>
                 <Feather name="inbox" size={48} color="#D1D5DB" />
-                <Text style={styles.emptyText}>No hay historial</Text>
-                <Text style={styles.emptySubtext}>Las sincronizaciones aparecerán aquí</Text>
+                <Text style={styles.emptyText}>No hay registros</Text>
+                <Text style={styles.emptySubtext}>
+                  Las operaciones de sincronización aparecerán aquí
+                </Text>
               </View>
             ) : (
               <View style={styles.itemsList}>
-                {filteredHistory.map((item, idx) => (
-                  <SyncHistoryItem key={item.id || idx} item={item} />
+                {filteredLogs.map((entry, idx) => (
+                  <SyncLogRow key={`log-${idx}`} entry={entry} />
                 ))}
               </View>
             )}
           </View>
         </Card>
 
-        {/* Botón limpiar */}
-        {history.length > 0 && (
+        {hasData && (
           <View style={styles.bottomButtonContainer}>
-            <TouchableOpacity 
-              style={styles.clearButton} 
-              onPress={handleClearHistory}
+            <TouchableOpacity
+              style={styles.clearButton}
+              onPress={handleClear}
               activeOpacity={0.7}
             >
               <Feather name="trash-2" size={16} color="#EF4444" />
-              <Text style={styles.clearButtonText}>Limpiar historial</Text>
+              <Text style={styles.clearButtonText}>Limpiar registro</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -447,10 +261,6 @@ export default function SyncHistoryScreen({ userData, username, onLogout, onNavi
     </ScreenLayout>
   );
 }
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Estilos
-// ──────────────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   scrollView: {
@@ -467,16 +277,12 @@ const styles = StyleSheet.create({
   cardContent: {
     padding: 16,
   },
-
-  // Título
   title: {
     fontSize: 18,
     fontWeight: '700',
     color: '#0B1B2A',
     marginBottom: 14,
   },
-
-  // Filtros
   filterContainer: {
     flexDirection: 'row',
     gap: 8,
@@ -502,232 +308,68 @@ const styles = StyleSheet.create({
   filterButtonTextActive: {
     color: '#fff',
   },
-
-  // Items List
   itemsList: {
     gap: 10,
     marginTop: 16,
   },
-  itemContainer: {
+  logItemContainer: {
     backgroundColor: '#fff',
     borderRadius: 10,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
-  itemHeader: {
+  logItemHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     padding: 14,
+    gap: 12,
   },
-  itemHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    gap: 10,
-  },
-  itemStatusDot: {
+  logDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
   },
-  itemMeta: {
+  logMeta: {
     flex: 1,
   },
-  itemType: {
+  logModel: {
     fontSize: 14,
     fontWeight: '700',
     color: '#0B1B2A',
     marginBottom: 2,
   },
-  itemDateTime: {
+  logDateTime: {
     fontSize: 12,
     color: '#9CA3AF',
   },
-  itemHeaderRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  expandIcon: {
-    marginLeft: 4,
-  },
-
-  // Badges
-  directionBadge: {
+  logDirBadge: {
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 6,
     borderWidth: 1,
   },
-  directionBadgeText: {
+  logDirText: {
     fontSize: 11,
     fontWeight: '700',
   },
-  statusBadge: {
+  logError: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  statusBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-
-  // Detalles expandidos
-  itemDetails: {
-    paddingHorizontal: 14,
-    paddingBottom: 14,
-    paddingTop: 0,
-    borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
-    gap: 12,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 8,
-  },
-  detailLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#6B7280',
-    minWidth: 80,
-  },
-  detailValue: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#0B1B2A',
-  },
-
-  // Fases (PULL/PUSH)
-  phaseSection: {
-    backgroundColor: '#f9fafb',
-    borderRadius: 8,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-  phaseHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 12,
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  phaseTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0B1B2A',
-    flex: 1,
-  },
-  phaseStats: {
-    backgroundColor: '#fff',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  phaseStatsText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#9CA3AF',
-  },
-
-  // Modelos
-  modelBlock: {
-    backgroundColor: '#fff',
     padding: 10,
+    marginHorizontal: 14,
+    marginBottom: 14,
     borderRadius: 6,
-    marginBottom: 8,
     borderWidth: 1,
-    borderColor: '#F3F4F6',
   },
-  modelDetailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 6,
-  },
-  modelLabel: {
+  logErrorText: {
     flex: 1,
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  durationText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '500',
-    color: '#9CA3AF',
-    marginLeft: 6,
-  },
-  countBadge: {
-    backgroundColor: '#FEF3C7',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    minWidth: 28,
-    alignItems: 'center',
-  },
-  countText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#D97706',
-  },
-
-  // CRUD Stats
-  crudStatsContainer: {
-    flexDirection: 'row',
-    gap: 6,
-    flexWrap: 'wrap',
-  },
-  crudBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 5,
-    borderWidth: 1,
-  },
-  crudText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  noDataText: {
-    fontSize: 12,
-    color: '#9CA3AF',
-    fontStyle: 'italic',
-    marginTop: 4,
-  },
-
-  // Errores
-  errorSection: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    padding: 10,
-    backgroundColor: '#FEF2F2',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#EF4444',
-  },
-  errorLabel: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: '600',
     color: '#EF4444',
+    lineHeight: 16,
   },
-
-  // Empty
   emptyState: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -744,8 +386,6 @@ const styles = StyleSheet.create({
     color: '#D1D5DB',
     marginTop: 4,
   },
-
-  // Botón inferior
   bottomButtonContainer: {
     paddingHorizontal: 16,
     paddingBottom: 20,

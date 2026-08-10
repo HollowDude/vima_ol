@@ -335,6 +335,7 @@ class SyncService {
       await StorageService.removeItem(STORAGE_KEYS.SURVEY_USER_INPUTS);
       await StorageService.removeItem(STORAGE_KEYS.EXTENDED_TASKS);
       await StorageService.removeItem(STORAGE_KEYS.SYNC_HISTORY);
+      await StorageService.removeItem(STORAGE_KEYS.SYNC_LOG);
       await Attachments.clearAttachmentsCache();
     } catch (error) {
       console.error(' Error limpiando datos locales:', error);
